@@ -1,4 +1,5 @@
 using BlogApp.Components;
+using BlogApp.Data;
 using BlogApp.Services;
 using MudBlazor.Services;
 
@@ -22,6 +23,10 @@ builder.Services.AddScoped<Supabase.Client>(_ =>
     ));
 
 builder.Services.AddScoped<UserService>();
+
+builder.Services.AddSingleton<DatabaseService>();
+
+builder.Services.AddScoped<BlogRepository>();
 
 var app = builder.Build();
 
