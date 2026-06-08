@@ -1,4 +1,5 @@
 using BlogApp.Components;
+using BlogApp.Services;
 using MudBlazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,8 @@ builder.Services.AddScoped<Supabase.Client>(_ =>
             AutoConnectRealtime = true
         }
     ));
+
+builder.Services.AddScoped<UserService>();
 
 var app = builder.Build();
 

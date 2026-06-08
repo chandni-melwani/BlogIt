@@ -1,4 +1,7 @@
 ﻿@inherits LayoutComponentBase
+@inject UserService UserService
+@inject NavigationManager Navigation
+@using BlogApp.Services
 
 <MudThemeProvider />
 <MudPopoverProvider />
@@ -36,5 +39,16 @@
     private void ToggleDrawer()
     {
         drawerOpen = !drawerOpen;
+    }
+
+    protected override void OnInitialized()
+    {
+        var currentUrl = Navigation.Uri;
+        if (!UserService.IsLoggedIn &&
+            !currentUrl.Contains("/login") &&
+            !currentUrl.Contains("/signup"))
+        {
+            Navigation.NavigateTo("/login");
+        }
     }
 }
