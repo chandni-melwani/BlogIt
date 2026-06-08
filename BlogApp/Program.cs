@@ -9,6 +9,17 @@ builder.Services.AddRazorComponents()
 
 builder.Services.AddMudServices();
 
+builder.Services.AddScoped<Supabase.Client>(_ =>
+    new Supabase.Client(
+        builder.Configuration["Supabase:Url"],
+        builder.Configuration["Supabase:AnonKey"],
+        new Supabase.SupabaseOptions
+        {
+            AutoRefreshToken = true,
+            AutoConnectRealtime = true
+        }
+    ));
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
