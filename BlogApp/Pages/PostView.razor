@@ -1,0 +1,577 @@
+@page "/post/{Id}"
+@using BlogApp.Models
+@using BlogApp.Data
+@using BlogApp.Services
+@using BlogApp.Helpers
+@using Markdig
+@using MudBlazor
+@using Microsoft.JSInterop
+@inject BlogRepository BlogRepo
+@inject UserService UserService
+@inject UserProfileRepository ProfileRepo
+@inject EngagementRepository EngageRepo
+@inject NotificationService NotificationSvc
+@inject AiSummaryService AiSummarySvc
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<div class="post-view-page">
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-6 mb-10">
+
+        @if (isLoading)
+        {
+            <LoadingLogo />
+        }
+        else if (post is null)
+        {
+            <MudText Typo="Typo.h6">Post not found.</MudText>
+            <MudButton Variant="Variant.Text" Class="back-link" Href="/">← Back to Home</MudButton>
+        }
+        else
+        {
+            <div style="display:flex; align-items:center; justify-content:space-between;" class="mb-4">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <MudLink Href="@($"/profile/{post.AuthorId}")" Underline="Underline.None">
+                        <AvatarInitial DisplayName="@authorUsername" Size="md" />
+                    </MudLink>
+                    <div style="display:flex; flex-direction:column;">
+                        <MudLink Href="@($"/profile/{post.AuthorId}")" Class="author-name-link" Underline="Underline.Hover">
+                            <b>@authorUsername</b>
+                        </MudLink>
+                        <MudText Class="meta-text">@post.CreatedAt.ToString("MMMM dd, yyyy")</MudText>
+                    </div>
+                </div>
+
+                @* Visibility badge *@
+                <div class="@($"visibility-pill {VisibilityHelper.GetVisibilityClass(post.Visibility)}")">
+                    <MudIcon Icon="@VisibilityHelper.GetVisibilityIcon(post.Visibility)" Size="Size.Small" />
+                    <span>@post.Visibility</span>
+                </div>
+            </div>
+
+            @* Post Title *@
+            <MudText Class="post-view-title mb-4">@post.Title</MudText>
+
+            @* Tags *@
+            @if (post.Tags is { Count: > 0 })
+            {
+                <div style="display:flex; gap:10px; flex-wrap:wrap;" class="mb-4">
+                    @foreach (var tag in post.Tags)
+                    {
+                        <span class="tag-text">#@tag</span>
+                    }
+                </div>
+            }
+
+            @* Engagement row — like / comment / share / AI summary *@
+            <div style="display:flex; align-items:center; gap:8px;" class="mb-5">
+                <MudTooltip Text="@(isLiked ? "Unlike" : "Like")">
+                    <MudIconButton Icon="@(isLiked ? Icons.Material.Filled.Favorite : Icons.Material.Outlined.FavoriteBorder)"
+                                   Class="@(isLiked ? "liked-icon" : "muted-icon")"
+                                   OnClick="ToggleLike" />
+                </MudTooltip>
+                <MudText Typo="Typo.body2" Class="meta-text" Style="margin-left:-10px;">@likeCount</MudText>
+
+                <MudTooltip Text="Comment">
+                    <MudIconButton Icon="@Icons.Material.Outlined.ChatBubbleOutline"
+                                   Class="muted-icon"
+                                   OnClick="@(() => JS.InvokeVoidAsync("postViewInterop.scrollToCommentsAndFocus"))" />
+                </MudTooltip>
+                <MudText Typo="Typo.body2" Class="meta-text" Style="margin-left:-10px;">@comments.Count</MudText>
+
+                <MudTooltip Text="Copy link">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Share"
+                                   Class="muted-icon"
+                                   OnClick="CopyLink" />
+                </MudTooltip>
+
+                <MudTooltip Text="AI Summary">
+                    <MudIconButton Icon="@Icons.Material.Filled.AutoAwesome"
+                                   Class="muted-icon"
+                                    Disabled="@aiSummaryLoading"
+                                   OnClick="OpenAiSummary" />
+                </MudTooltip>
+            </div>
+
+            @if (!string.IsNullOrEmpty(post.ImageUrl))
+            {
+                <div class="post-hero-image mb-5">
+                    <img src="@post.ImageUrl" alt="@post.Title" />
+                </div>
+            }
+
+            <MudDivider Class="mb-4" />
+
+            @* Rendered Markdown Content *@
+            <div class="blog-content markdown-content">
+                @((MarkupString)renderedContent)
+            </div>
+
+            @if (post.AuthorId == UserService.UserId)
+            {
+                <MudDivider Class="mt-8 mb-4" />
+
+                @* ── Author-only controls: visibility → edit → delete ────── *@
+                <div style="display:flex; align-items:center; gap:8px;">
+                    @* Quick visibility change *@
+                    <MudSelect Value="post.Visibility"
+                               ValueChanged="@((string v) => ChangeVisibility(v))"
+                               Variant="Variant.Outlined"
+                               Dense="true"
+                               Class="visibility-select"
+                               Style="min-width:160px; margin-top:-2px;">
+                        <MudSelectItem Value="@("Public")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Class="visibility-public" />
+                                <span>Public</span>
+                            </div>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@("Followers")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="visibility-followers" />
+                                <span>Followers</span>
+                            </div>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@("Private")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Outlined.Lock" Size="Size.Small" Class="visibility-private" />
+                                <span>Private</span>
+                            </div>
+                        </MudSelectItem>
+                    </MudSelect>
+
+                    @* Edit button → opens editor with this post pre-loaded *@
+                    <MudTooltip Text="Edit post">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Class="accent-icon"
+                                       Href="@($"/editor/{post.Id}")" />
+                    </MudTooltip>
+
+                    @* Delete button *@
+                    @if (!showDeleteConfirm)
+                    {
+                        <MudTooltip Text="Delete post">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                           Class="error-icon"
+                                           OnClick="@(() => showDeleteConfirm = true)" />
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            <MudText Typo="Typo.caption" Class="delete-confirm-text">Delete?</MudText>
+                            <MudButton Variant="Variant.Filled" Class="btn-error-filled" Size="Size.Small"
+                                       OnClick="DeletePost">Yes</MudButton>
+                            <MudButton Variant="Variant.Outlined" Class="btn-outline-neutral" Size="Size.Small"
+                                       OnClick="@(() => showDeleteConfirm = false)">No</MudButton>
+                        </div>
+                    }
+                </div>
+            }
+
+            <MudDivider Class="mt-6 mb-4" />
+
+            @* ── Comments ──────────────────────────────────────────────────── *@
+            <div id="comments">
+                <MudText Class="comments-heading mb-3">Comments (@comments.Count)</MudText>
+
+                @if (UserService.IsLoggedIn)
+                {
+                    <div style="display:flex; align-items:center; gap:8px;" class="mb-5">
+                        <MudTextField id="comment-input"
+                                      @bind-Value="newCommentText"
+                                      Placeholder="Add a comment..."
+                                      Variant="Variant.Outlined"
+                                      Lines="1"
+                                      Immediate="true"
+                                      Class="comment-input"
+                                      Style="flex:1;" />
+                        <MudButton Variant="Variant.Filled" Class="btn-accent-filled"
+                                   Disabled="@string.IsNullOrWhiteSpace(newCommentText)"
+                                   OnClick="SubmitComment">
+                            Post
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <div class="login-prompt-box pa-3 mb-5">
+                        <MudText Typo="Typo.body2">
+                            <MudLink Href="/login" Class="author-name-link">Log in</MudLink> to leave a comment.
+                        </MudText>
+                    </div>
+                }
+
+                @if (comments.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="meta-text">No comments yet — be the first to say something.</MudText>
+                }
+                else
+                {
+                    @foreach (var comment in comments)
+                    {
+                        <div style="display:flex; align-items:flex-start; gap:12px;" class="mb-4">
+                            <AvatarInitial DisplayName="@commenterNames.GetValueOrDefault(comment.UserId, "?")" Size="sm" />
+                            <div style="display:flex; flex-direction:column; flex:1;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <MudLink Href="@($"/profile/{comment.UserId}")" Typo="Typo.body2" Class="comment-author-link">
+                                        @commenterNames.GetValueOrDefault(comment.UserId, comment.UserId.Substring(0, 8) + "...").TrimStart('@')
+                                    </MudLink>
+                                    <MudText Typo="Typo.caption" Class="meta-text">@comment.CreatedAt.ToString("dd MMM yyyy")</MudText>
+                                </div>
+                                <MudText Typo="Typo.body2" Class="comment-body-text">@comment.Content</MudText>
+                            </div>
+                        </div>
+                    }
+                }
+
+                <MudButton Variant="Variant.Text" Class="back-link mt-6" Href="/">← Back to Home</MudButton>
+            </div>
+        }
+
+    </MudContainer>
+</div>
+
+<AiSummaryWindow IsOpen="showAiSummaryWindow"
+                 IsLoading="aiSummaryLoading"
+                 SummaryText="@(post?.AiSummary)"
+                 GeneratedAt="post?.AiSummaryGeneratedAt"
+                 IsAuthor="@(post is not null && post.AuthorId == UserService.UserId)"
+                 OnClose="CloseAiSummary"
+                 OnRegenerate="GenerateAiSummary" />
+
+<style>
+    .post-view-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .post-hero-image {
+        width: 100%;
+        max-height: 680px;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+    }
+
+        .post-hero-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+    .author-name-link {
+        color: var(--color-text-primary) !important;
+        font-size: 0.9rem;
+    }
+
+    .meta-text {
+        color: var(--color-text-muted) !important;
+        font-size: 0.78rem;
+    }
+
+    .post-view-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 800;
+        font-size: 2.4rem;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    .tag-text {
+        font-size: 0.85rem;
+        color: var(--color-accent);
+    }
+
+    .blog-content {
+        /* local overrides only — layout, not typography */
+    }
+
+    .muted-icon {
+        color: var(--color-text-muted) !important;
+    }
+
+    .liked-icon {
+        color: var(--color-error) !important;
+    }
+
+    .accent-icon {
+        color: var(--color-accent) !important;
+    }
+
+    .error-icon {
+        color: var(--color-error) !important;
+    }
+
+    .delete-confirm-text {
+        color: var(--color-error) !important;
+    }
+
+    .btn-error-filled {
+        background: var(--color-error) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-accent-filled {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-neutral {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+    }
+
+    .visibility-select {
+        color: var(--color-text-primary);
+    }
+
+        .visibility-select .mud-input-outlined-border,
+        .visibility-select fieldset,
+        .visibility-select .mud-input-slot {
+            border-color: var(--color-border) !important;
+        }
+
+        .visibility-select .mud-input-adornment,
+        .visibility-select .mud-select-input {
+            color: var(--color-text-primary) !important;
+        }
+
+        .visibility-select .mud-input-outlined-border {
+            border-color: var(--color-border) !important;
+        }
+
+    .visibility-public {
+        color: var(--color-success) !important;
+    }
+
+    .visibility-followers {
+        color: var(--color-accent) !important;
+    }
+
+    .visibility-private {
+        color: var(--color-text-muted) !important;
+    }
+
+    .comments-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.15rem;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    .comment-input .mud-input-outlined-border {
+        border-color: var(--color-border) !important;
+    }
+
+    .login-prompt-box {
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        background: var(--color-surface);
+    }
+
+    .comment-author-link {
+        color: var(--color-text-primary) !important;
+        font-weight: 600;
+    }
+
+    .comment-body-text {
+        color: var(--color-text-secondary);
+    }
+
+    .back-link {
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+    }
+</style>
+
+@code {
+    [Parameter] public string Id { get; set; } = "";
+
+    private BlogPost? post;
+    private string renderedContent = "";
+    private string authorUsername = "";
+    private bool isLoading = true;
+    private bool showDeleteConfirm = false;
+
+    // Engagement state
+    private bool isLiked = false;
+    private long likeCount = 0;
+    private List<Comment> comments = new();
+    private Dictionary<string, string> commenterNames = new();
+    private string newCommentText = "";
+
+    // AI Summary state
+    private bool showAiSummaryWindow = false;
+    private bool aiSummaryLoading = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        post = await BlogRepo.GetByIdAsync(Id);
+
+        if (post is not null)
+        {
+            var pipeline = new MarkdownPipelineBuilder()
+                .UseAdvancedExtensions()
+                .Build();
+            renderedContent = Markdown.ToHtml(post.Content, pipeline);
+
+            var profile = await ProfileRepo.GetByUserIdAsync(post.AuthorId);
+            authorUsername = profile?.Username ?? post.AuthorId.Substring(0, 8) + "...";
+            await LoadEngagement();
+        }
+
+        isLoading = false;
+    }
+
+    private async Task LoadEngagement()
+    {
+        likeCount = await EngageRepo.GetLikeCountAsync(Id);
+
+        if (UserService.IsLoggedIn)
+        {
+            var liked = await EngageRepo.GetLikedPostIdsAsync(UserService.UserId!, new List<string> { Id });
+            isLiked = liked.Contains(Id);
+        }
+
+        comments = await EngageRepo.GetCommentsAsync(Id);
+
+        if (comments.Count > 0)
+        {
+            var commenterIds = comments.Select(c => c.UserId).Distinct().ToList();
+            commenterNames = await ProfileRepo.GetDisplayNamesAsync(commenterIds);
+        }
+    }
+
+    private async Task ToggleLike()
+    {
+        if (!UserService.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        var isNowLiked = await EngageRepo.ToggleLikeAsync(Id, UserService.UserId!);
+        isLiked = isNowLiked;
+        likeCount += isNowLiked ? 1 : -1;
+
+        if (isNowLiked && post!.AuthorId != UserService.UserId)
+        {
+            var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+
+            await NotificationSvc.SendAsync(
+                toUserId: post.AuthorId,
+                fromUserId: UserService.UserId!,
+                message: $"{myUsername} liked your post \"{post.Title}\"",
+                type: "like",
+                postId: post.Id
+            );
+        }
+    }
+
+    private async Task SubmitComment()
+    {
+        if (string.IsNullOrWhiteSpace(newCommentText) || !UserService.IsLoggedIn || post is null) return;
+
+        var comment = await EngageRepo.AddCommentAsync(Id, UserService.UserId!, newCommentText.Trim());
+        comments.Add(comment);
+
+        var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+        commenterNames[UserService.UserId!] = myUsername;
+
+        newCommentText = "";
+
+        if (post.AuthorId != UserService.UserId)
+        {
+            await NotificationSvc.SendAsync(
+                toUserId: post.AuthorId,
+                fromUserId: UserService.UserId!,
+                message: $"{myUsername} commented on your post \"{post.Title}\"",
+                type: "comment",
+                postId: post.Id
+            );
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task CopyLink()
+    {
+        var url = Navigation.Uri;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+        Snackbar.Add("Link copied to clipboard", Severity.Success);
+    }
+
+    private async Task ChangeVisibility(string newVisibility)
+    {
+        if (post is null) return;
+        post.Visibility = newVisibility;
+        post.UpdatedAt = DateTime.UtcNow;
+        await BlogRepo.UpdateAsync(post);
+        Snackbar.Add($"Visibility changed to {newVisibility} ✅", Severity.Success);
+        StateHasChanged();
+    }
+
+    private async Task DeletePost()
+    {
+        await BlogRepo.DeleteAsync(Id);
+        Snackbar.Add("Post deleted.", Severity.Info);
+        Navigation.NavigateTo("/");
+    }
+
+    // ── AI Summary ──────────────────────────────────────────────────────
+
+    private async Task OpenAiSummary()
+    {
+        if (post is null) return;
+
+        showAiSummaryWindow = true;
+
+        if (string.IsNullOrWhiteSpace(post.AiSummary))
+        {
+            await GenerateAiSummary();
+        }
+    }
+
+    private async Task GenerateAiSummary()
+    {
+       if (post is null || aiSummaryLoading) return;
+
+        aiSummaryLoading = true;
+        StateHasChanged();
+
+        var plainText = MarkdownHelper.StripMarkdownFull(post.Content);
+        var (success, summary, error) = await AiSummarySvc.GenerateSummaryAsync(post.Title, plainText);
+
+        if (success && !string.IsNullOrWhiteSpace(summary))
+        {
+            var generatedAt = DateTime.UtcNow;
+            await BlogRepo.UpdateAiSummaryAsync(post.Id!, summary, generatedAt);
+            post.AiSummary = summary;
+            post.AiSummaryGeneratedAt = generatedAt;
+        }
+        else
+        {
+            Snackbar.Add(error ?? "Couldn't generate a summary.", Severity.Error);
+        }
+
+        aiSummaryLoading = false;
+        StateHasChanged();
+    }
+
+    private void CloseAiSummary()
+    {
+        showAiSummaryWindow = false;
+    }
+
+    private string GetVisibilityIcon(string v) => VisibilityHelper.GetVisibilityIcon(v);
+    private string GetVisibilityClass(string v) => VisibilityHelper.GetVisibilityClass(v);
+}

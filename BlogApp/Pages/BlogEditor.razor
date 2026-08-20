@@ -1,0 +1,1222 @@
+@page "/editor"
+@page "/editor/{PostId}"
+@implements IDisposable
+@using BlogApp.Services
+@using BlogApp.Data
+@using BlogApp.Models
+@using MudBlazor
+@inject BlogRepository BlogRepo
+@inject UserService UserService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject ImageUploadService ImageUploader
+
+<div class="editor-page">
+    <MudContainer MaxWidth="MaxWidth.Large" Class="mt-6 pb-10">
+
+        @if (isLoading)
+        {
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Class="mt-8" />
+        }
+        else
+        {
+            @if (hasDraftAvailable && !hasDraftPromptDismissed)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+                    <div class="d-flex align-center justify-space-between w-100">
+                        <div>
+                            <strong>Resume Draft Available</strong>
+                            <span class="ml-2">@(string.IsNullOrEmpty(existingDraftTitle) ? "You have a saved draft for this post from a previous session." : $"Draft: \"{existingDraftTitle}\"")</span>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="ResumeDraft">Resume Draft</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" OnClick="DiscardDraftPrompt">Discard Draft</MudButton>
+                        </div>
+                    </div>
+                </MudAlert>
+            }
+
+            <MudText Class="page-heading mb-4">
+                @(isEditMode ? "Edit Post" : "New Post")
+            </MudText>
+
+            <MudTextField @bind-Value="title"
+                          Placeholder="Post title..."
+                          Variant="Variant.Outlined"
+                          FullWidth="true"
+                          Class="title-field mb-4" />
+
+            <MudTextField @bind-Value="summary"
+                          Placeholder="Subtitle or tagline (optional) — shown on the home feed instead of an auto-excerpt"
+                          Variant="Variant.Outlined"
+                          FullWidth="true"
+                          Lines="2"
+                          MaxLength="200"
+                          Class="subtitle-field mb-4" />
+
+            <div class="cover-image-section mb-4">
+
+                <span class="field-label mb-2" style="display:block;">Cover Image</span>
+
+                @if (!string.IsNullOrEmpty(imagePreviewUrl))
+                {
+                    <div class="cover-image-preview">
+                        <img src="@imagePreviewUrl" alt="Cover preview" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                       Size="Size.Small"
+                                       Class="remove-image-btn"
+                                       OnClick="RemoveImage" />
+                    </div>
+                }
+                else
+                {
+                    <MudFileUpload T="IBrowserFile" @ref="_coverFileUpload" FilesChanged="OnImageSelected" Accept=".png,.jpg,.jpeg,.webp,.gif">
+                        <ActivatorContent>
+                            <MudButton Variant="Variant.Outlined"
+                                       Class="btn-outline-neutral"
+                                       StartIcon="@Icons.Material.Filled.AddPhotoAlternate">
+                                Add Cover Image
+                            </MudButton>
+                        </ActivatorContent>
+                    </MudFileUpload>
+                }
+
+                @if (isUploadingImage)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="mt-2" />
+                }
+            </div>
+
+            <MudGrid Class="mb-4">
+                <MudItem xs="12" sm="4">
+                    <MudSelect @bind-Value="visibility" Label="Visibility" Variant="Variant.Outlined">
+                        <MudSelectItem Value="@("Public")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Class="visibility-public" />
+                                <span>Public</span>
+                            </div>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@("Followers")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="visibility-followers" />
+                                <span>Followers</span>
+                            </div>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@("Private")">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <MudIcon Icon="@Icons.Material.Outlined.Lock" Size="Size.Small" Class="visibility-private" />
+                                <span>Private</span>
+                            </div>
+                        </MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="8">
+                    <MudTextField @bind-Value="tags"
+                                  Label="Tags (comma separated)"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            <MudDivider Class="mb-4" />
+
+            <div class="editor-shell">
+                <div class="editor-sticky-bar mb-1">
+                    <span class="field-label">Content</span>
+                    <div style="display:flex; gap:8px;">
+                        <button class="action-btn preview-btn" @onclick="TogglePreview">
+                            👁 @(_previewOn ? "Edit" : "Preview")
+                        </button>
+                        <button class="action-btn clear-btn" @onclick="ClearEditor">
+                            ✕ Clear
+                        </button>
+                    </div>
+                </div>
+
+                <div class="easymde-wrap mb-0">
+                    <textarea id="easymde-editor"></textarea>
+                </div>
+            </div>
+
+            <div class="editor-actions mt-3 mb-5">
+                <div></div>
+                <div class="action-right">
+                    <MudButton Variant="Variant.Outlined"
+                               Class="btn-outline-neutral"
+                               Disabled="@isSaving"
+                               OnClick="SaveDraftManual">
+                        Save Draft
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled"
+                               Class="btn-accent-filled"
+                               Disabled="@isSaving"
+                               OnClick="SavePost">
+                        @(isSaving ? "Saving..." : (isEditMode ? "Save Changes" : "Publish Post"))
+                    </MudButton>
+                    @if (isEditMode)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Class="btn-outline-neutral"
+                                   Href="@($"/post/{PostId}")">
+                            Cancel
+                        </MudButton>
+                    }
+                </div>
+            </div>
+        }
+
+    </MudContainer>
+</div>
+
+@if (_showUnsavedModal)
+{
+    <div class="unsaved-modal-backdrop">
+        <div class="unsaved-modal-card">
+            <h3 class="unsaved-modal-title">Unsaved Changes</h3>
+            <p class="unsaved-modal-body">
+                You have unsaved changes in your editor. What would you like to do before leaving?
+            </p>
+            <div class="unsaved-modal-actions">
+                <button class="unsaved-btn btn-save-draft" @onclick="SaveDraftFromModal">
+                    Save as Draft
+                </button>
+                <button class="unsaved-btn btn-discard" @onclick="DiscardFromModal">
+                    Discard
+                </button>
+                <button class="unsaved-btn btn-cancel" @onclick="CancelFromModal">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    :root {
+        --editor-min-height: 560px;
+        --appbar-height: 56px;
+    }
+
+    .editor-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .page-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.35rem;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    /* ── Sticky Content bar above editor ── */
+    .editor-sticky-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: sticky;
+        top: var(--appbar-height);
+        z-index: 100;
+        background: var(--color-bg);
+        padding: 6px 0;
+        border-bottom: 1px solid var(--color-border);
+        margin-bottom: 0;
+    }
+
+    .field-label {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--color-text-secondary);
+        letter-spacing: 0.02em;
+    }
+
+    /* ── EasyMDE toolbar chrome ── */
+    .easymde-wrap .editor-toolbar {
+        border-radius: 8px 8px 0 0;
+        border-color: var(--color-border);
+        background: var(--color-surface);
+        padding: 6px 8px;
+    }
+
+    .easymde-wrap .editor-toolbar button {
+        color: var(--color-text-secondary) !important;
+        border-radius: 6px !important;
+        width: 34px !important;
+        height: 34px !important;
+        font-size: 1rem !important;
+        line-height: 34px !important;
+    }
+
+    .easymde-wrap .editor-toolbar i.separator {
+        border-color: var(--color-border);
+    }
+
+    .easymde-wrap .editor-toolbar button:hover,
+    .easymde-wrap .editor-toolbar button.active {
+        background: color-mix(in srgb, var(--color-accent) 10%, transparent) !important;
+        border-color: transparent !important;
+        color: var(--color-accent) !important;
+    }
+
+    .easymde-wrap {
+        position: relative;
+        overflow: hidden;
+        min-width: 300px;
+        height: var(--editor-min-height);
+        min-height: var(--editor-min-height);
+        border-radius: 0 0 8px 8px;
+        box-sizing: border-box;
+    }
+
+    .EasyMDEContainer {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        grid-template-rows: auto 1fr auto !important;
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    .EasyMDEContainer > .editor-toolbar {
+        grid-column: 1 / -1 !important;
+        grid-row: 1 !important;
+    }
+
+    .EasyMDEContainer > .editor-statusbar {
+        grid-column: 1 / -1 !important;
+        grid-row: 3 !important;
+    }
+
+    .EasyMDEContainer > .CodeMirror {
+        grid-column: 1 / -1 !important;
+        grid-row: 2 !important;
+        position: relative !important;
+        width: 100% !important;
+        height: 100% !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+    }
+
+    .easymde-wrap .CodeMirror {
+        font-family: 'Georgia', serif;
+        font-size: 1rem;
+        line-height: 1.75;
+        color: var(--color-text-primary);
+        border-color: var(--color-border);
+        background: var(--color-surface);
+        padding: 16px 20px;
+    }
+
+    .easymde-wrap .CodeMirror-scroll {
+        overflow-y: auto !important;
+    }
+
+    .EasyMDEContainer:has(.editor-preview.editor-preview-active:not(.editor-preview-active-side)) > .CodeMirror {
+        visibility: hidden;
+    }
+
+    .EasyMDEContainer:has(> .editor-preview.editor-preview-active-side) > .CodeMirror {
+        grid-column: 1 / 2 !important;
+        display: block !important;
+    }
+
+    .EasyMDEContainer .editor-preview {
+        display: none;
+        overflow: hidden;
+        box-sizing: border-box !important;
+    }
+
+    .EasyMDEContainer .CodeMirror .editor-preview.editor-preview-active:not(.editor-preview-active-side) {
+        display: block !important;
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 1;
+        overflow-y: auto !important;
+        background: var(--color-surface) !important;
+        color: var(--color-text-primary) !important;
+        font-family: 'Georgia', serif;
+        font-size: 1rem;
+        line-height: 1.8;
+        padding: 32px clamp(40px, calc(50% - 360px), 20%) !important;
+        visibility: visible !important;
+    }
+
+    .EasyMDEContainer > .editor-preview.editor-preview-active-side {
+        display: block !important;
+        grid-column: 2 / 3 !important;
+        grid-row: 2 !important;
+        position: static !important;
+        width: 100% !important;
+        height: 100% !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        pointer-events: auto !important;
+        background: var(--color-surface) !important;
+        color: var(--color-text-primary) !important;
+        font-family: 'Georgia', serif;
+        font-size: 1rem;
+        line-height: 1.8;
+        padding: 24px 32px !important;
+        border-left: 1px solid var(--color-border) !important;
+        margin: 0 !important;
+        max-width: none !important;
+    }
+
+    .easymde-wrap .editor-preview > *:first-child { margin-top: 0 !important; }
+    .easymde-wrap .editor-preview h1 { font-family: 'Playfair Display', serif; font-size: 1.9rem; line-height: 1.2; margin-top: 0.5em; margin-bottom: 0.4em; color: var(--color-text-primary); }
+    .easymde-wrap .editor-preview h2 { font-family: 'Playfair Display', serif; font-size: 1.4rem; line-height: 1.3; margin-top: 1.4em; margin-bottom: 0.4em; color: var(--color-text-primary); }
+    .easymde-wrap .editor-preview h3 { font-size: 1.2rem; font-weight: 700; margin-top: 1.2em; margin-bottom: 0.3em; color: var(--color-text-primary); }
+    .easymde-wrap .editor-preview p { margin: 1rem 0; }
+    .easymde-wrap .editor-preview ul, .easymde-wrap .editor-preview ol { padding-left: 1.6em; margin: 0.8em 0; }
+    .easymde-wrap .editor-preview li { margin: 0.35em 0; }
+    .easymde-wrap .editor-preview input[type="checkbox"] { margin-right: 0.4em; accent-color: var(--color-accent); vertical-align: middle; }
+    .easymde-wrap .editor-preview blockquote { border-left: 4px solid var(--color-accent); padding: 10px 20px; margin: 1.2em 0; color: var(--color-text-secondary); font-style: italic; background: color-mix(in srgb, var(--color-accent) 5%, transparent); border-radius: 0 8px 8px 0; }
+    .easymde-wrap .editor-preview pre { background: #1e1e1e; color: #d4d4d4; padding: 16px 20px; border-radius: 8px; overflow-x: auto; font-size: 0.88rem; margin: 1em 0; }
+    .easymde-wrap .editor-preview code { background: color-mix(in srgb, var(--color-accent) 8%, transparent); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: 'Consolas', 'Fira Code', monospace; }
+    .easymde-wrap .editor-preview pre > code { background: transparent; padding: 0; font-size: inherit; border-radius: 0; }
+    .easymde-wrap .editor-preview a { color: var(--color-accent); text-decoration: underline; }
+    .easymde-wrap .editor-preview table { border-collapse: collapse; width: 100%; margin: 1.2em 0; font-size: 0.95rem; }
+    .easymde-wrap .editor-preview th, .easymde-wrap .editor-preview td { border: 1px solid var(--color-border); padding: 8px 12px; text-align: left; }
+    .easymde-wrap .editor-preview th { background: color-mix(in srgb, var(--color-accent) 6%, transparent); font-weight: 600; }
+    .easymde-wrap .editor-preview hr { border: none; border-top: 1px solid var(--color-border); margin: 2em 0; }
+    .easymde-wrap .editor-preview img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.5em 0; }
+
+    .easymde-wrap .CodeMirror .cm-header-1 { font-size: 1.5em !important; }
+    .easymde-wrap .CodeMirror .cm-header-2 { font-size: 1.25em !important; }
+    .easymde-wrap .CodeMirror .cm-header-3 { font-size: 1.1em !important; }
+
+    body:has(.CodeMirror-fullscreen) .editor-shell {
+        position: fixed !important;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        background: var(--color-bg);
+    }
+
+    body:has(.CodeMirror-fullscreen) .editor-shell .editor-sticky-bar {
+        position: static !important;
+        top: auto;
+        flex: 0 0 auto;
+        padding: 8px 24px;
+    }
+
+    body:has(.CodeMirror-fullscreen) .editor-shell .easymde-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+        resize: none;
+    }
+
+    body:has(.CodeMirror-fullscreen) .editor-shell .editor-toolbar,
+    body:has(.CodeMirror-fullscreen) .editor-shell .editor-toolbar.fullscreen {
+        position: static !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        width: 100% !important;
+    }
+
+    .CodeMirror-fullscreen .CodeMirror-scroll {
+        height: 100% !important;
+        min-height: unset !important;
+        overflow-y: auto !important;
+    }
+
+    body:has(.CodeMirror-fullscreen) .mud-drawer,
+    body:has(.CodeMirror-fullscreen) .mud-appbar {
+        z-index: 1 !important;
+    }
+
+    body:has(.CodeMirror-fullscreen) .mud-layout,
+    body:has(.CodeMirror-fullscreen) .mud-main-content,
+    body:has(.CodeMirror-fullscreen) .mud-container,
+    body:has(.CodeMirror-fullscreen) .editor-page {
+        transform: none !important;
+    }
+
+    .editor-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .action-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 16px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+        border: 1.5px solid var(--color-border);
+        background: transparent;
+        color: var(--color-text-secondary);
+    }
+
+    .action-btn:hover {
+        background: rgba(0,0,0,0.04);
+    }
+
+    .preview-btn {
+        border-color: color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
+        color: var(--color-accent) !important;
+        background: color-mix(in srgb, var(--color-accent) 6%, transparent) !important;
+    }
+
+    .preview-btn:hover {
+        background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+    }
+
+    .clear-btn:hover {
+        border-color: var(--color-error) !important;
+        color: var(--color-error) !important;
+        background: color-mix(in srgb, var(--color-error) 6%, transparent) !important;
+    }
+
+    .title-field input {
+        font-family: 'Playfair Display', serif !important;
+        font-size: 1.2rem !important;
+    }
+
+    .subtitle-field textarea {
+        font-size: 0.95rem !important;
+        color: var(--color-text-secondary) !important;
+    }
+
+    .visibility-public   { color: var(--color-success) !important; }
+    .visibility-followers { color: var(--color-accent) !important; }
+    .visibility-private  { color: var(--color-text-muted) !important; }
+
+    .btn-accent-filled {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-neutral {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+    }
+
+    .cover-image-preview {
+        position: relative;
+        max-width: 480px;
+        max-height: 320px;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid var(--color-border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+    }
+
+    .cover-image-preview img {
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        max-height: 320px;
+        object-fit: contain;
+        display: block;
+    }
+
+    .remove-image-btn {
+        position: absolute !important;
+        top: 6px;
+        right: 6px;
+        background: rgba(0,0,0,0.55) !important;
+        color: #fff !important;
+    }
+
+    .remove-image-btn:hover {
+        background: rgba(0,0,0,0.75) !important;
+    }
+
+    /* ── Unsaved changes modal ── */
+    .unsaved-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+
+    .unsaved-modal-card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        padding: 28px 32px;
+        max-width: 440px;
+        width: 100%;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+    }
+
+    .unsaved-modal-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.3rem;
+        color: var(--color-text-primary);
+        margin: 0 0 10px;
+    }
+
+    .unsaved-modal-body {
+        font-size: 0.9rem;
+        color: var(--color-text-secondary);
+        margin: 0 0 24px;
+        line-height: 1.5;
+    }
+
+    .unsaved-modal-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .unsaved-btn {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: background 0.15s ease;
+    }
+
+    .btn-save-draft {
+        background: var(--color-accent);
+        color: #fff;
+    }
+
+    .btn-discard {
+        background: color-mix(in srgb, var(--color-error) 10%, transparent);
+        color: var(--color-error);
+        border-color: color-mix(in srgb, var(--color-error) 30%, transparent);
+    }
+
+    .btn-cancel {
+        background: transparent;
+        color: var(--color-text-secondary);
+        border-color: var(--color-border);
+    }
+</style>
+
+@code {
+    [Parameter] public string? PostId { get; set; }
+    [SupplyParameterFromQuery(Name = "loadDraft")] public bool LoadDraft { get; set; }
+    [SupplyParameterFromQuery(Name = "draftId")] public string? DraftId { get; set; }
+
+    private bool _previewOn = false;
+
+    private string title = "";
+    private string content = "";
+    private string visibility = "Public";
+    private string tags = "";
+    private string summary = "";
+    private bool isEditMode => !string.IsNullOrEmpty(PostId);
+
+    private string? imageUrl;
+    private string? imagePreviewUrl;
+    private byte[]? selectedImageBytes;
+    private string? selectedImageFileName;
+    private MudFileUpload<IBrowserFile>? _coverFileUpload;
+    private bool isUploadingImage = false;
+    private bool isSaving = false;
+
+    private bool isLoading = true;
+    private bool _isDisposed = false;
+    private bool _editorInitialized = false;
+
+    // ── Draft & Dirty Checking State ──
+    private record Snapshot(string Title, string Content, string Summary, string Visibility, string Tags, string? ImageUrl);
+    private Snapshot? _initialSnapshot;
+
+    private string? _currentDraftId;
+    private string? _savedDraftImageUrl;
+
+    private bool hasDraftAvailable = false;
+    private bool hasDraftPromptDismissed = false;
+    private string existingDraftTitle = "";
+    private Draft? _loadedDraft;
+
+    private IDisposable? _locationChangingRegistration;
+    private bool _showUnsavedModal = false;
+    private string? _pendingNavigationTarget;
+    private bool _isSavingOrPublishing = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+        _locationChangingRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+
+        if (UserService.IsLoggedIn)
+        {
+            await InitPageAsync();
+        }
+    }
+
+    private async Task InitPageAsync()
+    {
+        if (isEditMode)
+        {
+            await LoadPostAsync();
+        }
+        else
+        {
+            isLoading = false;
+            TakeSnapshot("");
+        }
+
+        await CheckExistingDraftAsync();
+
+        if (LoadDraft && _loadedDraft != null)
+        {
+            await ResumeDraft();
+        }
+    }
+
+    private async Task CheckExistingDraftAsync()
+    {
+        if (string.IsNullOrEmpty(UserService.UserId)) return;
+
+        bool isAuthoritative = false;
+
+        if (!string.IsNullOrEmpty(DraftId))
+        {
+            // Explicit draftId in the URL (e.g. clicked from Drafts page) — safe to bind immediately.
+            _loadedDraft = await BlogRepo.GetDraftByIdAsync(DraftId);
+            isAuthoritative = true;
+        }
+        else if (isEditMode)
+        {
+            // Scoped to this specific post — safe to bind immediately.
+            _loadedDraft = await BlogRepo.GetDraftAsync(UserService.UserId!, PostId);
+            isAuthoritative = true;
+        }
+        else
+        {
+            // Brand new post — this only checks whether an orphan draft exists.
+            // It must NOT become the active draft until the user chooses to resume it.
+            _loadedDraft = await BlogRepo.GetDraftAsync(UserService.UserId!, null);
+        }
+
+        if (_loadedDraft != null)
+        {
+            hasDraftAvailable = true;
+            existingDraftTitle = _loadedDraft.Title;
+
+            if (isAuthoritative)
+            {
+                _currentDraftId = _loadedDraft.Id;
+                _savedDraftImageUrl = _loadedDraft.ImageUrl;
+            }
+
+            StateHasChanged();
+        }
+    }
+
+    private async Task ResumeDraft()
+    {
+        if (_loadedDraft == null) return;
+
+        _currentDraftId = _loadedDraft.Id;
+        _savedDraftImageUrl = _loadedDraft.ImageUrl;
+
+        title = _loadedDraft.Title;
+        content = _loadedDraft.Content;
+        summary = _loadedDraft.Summary;
+        visibility = _loadedDraft.Visibility;
+        tags = string.Join(", ", _loadedDraft.Tags);
+        imageUrl = _loadedDraft.ImageUrl;
+        imagePreviewUrl = _loadedDraft.ImageUrl;
+
+        if (_editorInitialized)
+        {
+            await JS.InvokeVoidAsync("setEditorContent", content);
+        }
+
+        hasDraftPromptDismissed = true;
+        TakeSnapshot(content);
+        Snackbar.Add("Draft resumed!", Severity.Info);
+        StateHasChanged();
+    }
+
+    private async Task DiscardDraftPrompt()
+    {
+        if (!string.IsNullOrEmpty(UserService.UserId))
+        {
+            if (!string.IsNullOrEmpty(_currentDraftId))
+            {
+                await BlogRepo.DeleteDraftByIdAsync(_currentDraftId);
+            }
+            else
+            {
+                await BlogRepo.DeleteDraftAsync(UserService.UserId!, PostId);
+            }
+        }
+
+        string? imageToDelete = _savedDraftImageUrl ?? imageUrl;
+        if (!string.IsNullOrEmpty(imageToDelete))
+        {
+            _ = ImageUploader.DeleteCoverImageAsync(imageToDelete);
+        }
+
+        _currentDraftId = null;
+        _savedDraftImageUrl = null;
+        imageUrl = null;
+        imagePreviewUrl = null;
+        selectedImageBytes = null;
+        selectedImageFileName = null;
+        hasDraftAvailable = false;
+        hasDraftPromptDismissed = true;
+        Snackbar.Add("Draft discarded.", Severity.Normal);
+        StateHasChanged();
+    }
+
+    private async Task LoadPostAsync()
+    {
+        if (string.IsNullOrEmpty(UserService.UserId))
+        {
+            Navigation.NavigateTo("/");
+            return;
+        }
+
+        if (_isDisposed) return;
+
+        var existing = await BlogRepo.GetByIdAsync(PostId!);
+
+        if (_isDisposed) return;
+
+        if (existing == null || existing.AuthorId != UserService.UserId)
+        {
+            Navigation.NavigateTo("/");
+            return;
+        }
+
+        title = existing.Title;
+        content = existing.Content;
+        visibility = existing.Visibility;
+        tags = string.Join(", ", existing.Tags);
+        summary = existing.Summary ?? "";
+        imageUrl = existing.ImageUrl;
+        imagePreviewUrl = existing.ImageUrl;
+        _savedDraftImageUrl = existing.ImageUrl;
+
+        isLoading = false;
+        TakeSnapshot(content);
+        StateHasChanged();
+    }
+
+    private void TakeSnapshot(string? currentEditorContent)
+    {
+        _initialSnapshot = new Snapshot(
+            Title: title ?? "",
+            Content: currentEditorContent ?? "",
+            Summary: summary ?? "",
+            Visibility: visibility ?? "Public",
+            Tags: tags ?? "",
+            ImageUrl: imageUrl
+        );
+    }
+
+    private async Task<bool> CheckIsDirtyAsync()
+    {
+        if (_initialSnapshot == null) return false;
+
+        string currentContent = content;
+        if (_editorInitialized)
+        {
+            try
+            {
+                currentContent = await JS.InvokeAsync<string>("getEditorContent");
+            }
+            catch { }
+        }
+
+        bool isDirty = (title ?? "") != _initialSnapshot.Title ||
+                       (currentContent ?? "") != _initialSnapshot.Content ||
+                       (summary ?? "") != _initialSnapshot.Summary ||
+                       (visibility ?? "Public") != _initialSnapshot.Visibility ||
+                       (tags ?? "") != _initialSnapshot.Tags ||
+                       imageUrl != _initialSnapshot.ImageUrl ||
+                       selectedImageBytes != null;
+
+        try
+        {
+            await JS.InvokeVoidAsync("setBeforeUnloadDirty", isDirty);
+        }
+        catch { }
+
+        return isDirty;
+    }
+
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (_isSavingOrPublishing) return;
+
+        bool isDirty = await CheckIsDirtyAsync();
+        if (isDirty)
+        {
+            context.PreventNavigation();
+            _pendingNavigationTarget = context.TargetLocation;
+            _showUnsavedModal = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async void OnSessionReady()
+    {
+        if (_isDisposed) return;
+
+        await InvokeAsync(async () =>
+        {
+            if (_isDisposed) return;
+            await InitPageAsync();
+        });
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        UserService.OnSessionReady -= OnSessionReady;
+        _locationChangingRegistration?.Dispose();
+        try
+        {
+            JS.InvokeVoidAsync("setBeforeUnloadDirty", false);
+        }
+        catch { }
+    }
+
+    private async Task OnImageSelected(IBrowserFile file)
+    {
+        if (file == null) return;
+
+        const long maxSize = 5 * 1024 * 1024;
+        if (file.Size > maxSize)
+        {
+            Snackbar.Add("Image must be smaller than 5MB.", Severity.Warning);
+            if (_coverFileUpload != null)
+            {
+                await _coverFileUpload.ClearAsync();
+            }
+            return;
+        }
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            selectedImageBytes = ms.ToArray();
+            selectedImageFileName = file.Name;
+
+            imagePreviewUrl = $"data:{file.ContentType};base64,{Convert.ToBase64String(selectedImageBytes)}";
+            await CheckIsDirtyAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Couldn't read image: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RemoveImage()
+    {
+        selectedImageBytes = null;
+        selectedImageFileName = null;
+        imagePreviewUrl = null;
+        imageUrl = null;
+        await CheckIsDirtyAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!isLoading && !_editorInitialized)
+        {
+            _editorInitialized = true;
+            await JS.InvokeVoidAsync("initEditor", content);
+
+            if (_loadedDraft != null && hasDraftAvailable && !hasDraftPromptDismissed)
+            {
+                // Wait for user prompt response
+            }
+        }
+    }
+
+    private async Task TogglePreview()
+    {
+        try
+        {
+            _previewOn = await JS.InvokeAsync<bool>("toggleEditorPreview");
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling preview: {ex.Message}");
+        }
+    }
+
+    private async Task ClearEditor()
+    {
+        await JS.InvokeVoidAsync("clearEditorContent");
+        await CheckIsDirtyAsync();
+    }
+
+    private async Task SaveDraftManual()
+    {
+        if (string.IsNullOrEmpty(UserService.UserId))
+        {
+            Snackbar.Add("You must be logged in to save a draft.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            string editorContent = await JS.InvokeAsync<string>("getEditorContent");
+            var tagList = (tags ?? "").Split(',')
+                                     .Select(t => t.Trim())
+                                     .Where(t => !string.IsNullOrEmpty(t))
+                                     .ToList();
+
+            string? previousSavedUrl = _savedDraftImageUrl;
+
+            if (selectedImageBytes != null && selectedImageFileName != null)
+            {
+                isUploadingImage = true;
+                StateHasChanged();
+
+                var (success, url, error) = await ImageUploader.UploadCoverImageAsync(
+                    selectedImageBytes, selectedImageFileName, UserService.UserId!);
+
+                isUploadingImage = false;
+
+                if (!success)
+                {
+                    Snackbar.Add(error ?? "Image upload failed.", Severity.Error);
+                    return;
+                }
+
+                imageUrl = url;
+                imagePreviewUrl = url;
+                selectedImageBytes = null;
+                selectedImageFileName = null;
+            }
+
+            var draft = new Draft
+            {
+                Id = _currentDraftId,
+                UserId = UserService.UserId!,
+                PostId = PostId,
+                Title = title ?? "",
+                Content = editorContent ?? "",
+                Summary = summary ?? "",
+                Visibility = visibility ?? "Public",
+                Tags = tagList,
+                ImageUrl = imageUrl,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await BlogRepo.SaveDraftAsync(draft);
+            _currentDraftId = draft.Id;
+
+            if (!string.IsNullOrEmpty(previousSavedUrl) && previousSavedUrl != imageUrl)
+            {
+                _ = ImageUploader.DeleteCoverImageAsync(previousSavedUrl);
+            }
+
+            _savedDraftImageUrl = imageUrl;
+
+            TakeSnapshot(editorContent);
+            await JS.InvokeVoidAsync("setBeforeUnloadDirty", false);
+            Snackbar.Add("Draft saved!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save draft: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveDraftFromModal()
+    {
+        await SaveDraftManual();
+        _showUnsavedModal = false;
+        _isSavingOrPublishing = true;
+        if (!string.IsNullOrEmpty(_pendingNavigationTarget))
+        {
+            Navigation.NavigateTo(_pendingNavigationTarget);
+        }
+    }
+
+    private async Task DiscardFromModal()
+    {
+        _showUnsavedModal = false;
+        _isSavingOrPublishing = true;
+        try
+        {
+            await JS.InvokeVoidAsync("setBeforeUnloadDirty", false);
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(_pendingNavigationTarget))
+        {
+            Navigation.NavigateTo(_pendingNavigationTarget);
+        }
+    }
+
+    private void CancelFromModal()
+    {
+        _showUnsavedModal = false;
+        _pendingNavigationTarget = null;
+        StateHasChanged();
+    }
+
+    private async Task SavePost()
+    {
+        if (isSaving) return;
+        isSaving = true;
+        _isSavingOrPublishing = true;
+        StateHasChanged();
+
+        try
+        {
+            content = await JS.InvokeAsync<string>("getEditorContent");
+
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(content))
+            {
+                Snackbar.Add("Title and content are required.", Severity.Warning);
+                isSaving = false;
+                _isSavingOrPublishing = false;
+                return;
+            }
+
+            var tagList = tags.Split(',')
+                              .Select(t => t.Trim())
+                              .Where(t => !string.IsNullOrEmpty(t))
+                              .ToList();
+
+            string? previousSavedUrl = _savedDraftImageUrl;
+
+            if (selectedImageBytes != null && selectedImageFileName != null)
+            {
+                isUploadingImage = true;
+                StateHasChanged();
+
+                var (success, url, error) = await ImageUploader.UploadCoverImageAsync(
+                    selectedImageBytes, selectedImageFileName, UserService.UserId ?? "");
+
+                isUploadingImage = false;
+
+                if (!success)
+                {
+                    Snackbar.Add(error ?? "Image upload failed.", Severity.Error);
+                    isSaving = false;
+                    _isSavingOrPublishing = false;
+                    return;
+                }
+
+                imageUrl = url;
+                selectedImageBytes = null;
+                selectedImageFileName = null;
+            }
+
+            if (isEditMode)
+            {
+                var existing = await BlogRepo.GetByIdAsync(PostId!);
+                if (existing is null) return;
+
+                var postOldImageUrl = existing.ImageUrl;
+
+                existing.Title = title;
+                existing.Content = content;
+                existing.Visibility = visibility;
+                existing.Tags = tagList;
+                existing.Summary = string.IsNullOrWhiteSpace(summary) ? "" : summary.Trim();
+                existing.ImageUrl = imageUrl;
+                existing.UpdatedAt = DateTime.UtcNow;
+
+                await BlogRepo.UpdateAsync(existing);
+
+                if (!string.IsNullOrEmpty(postOldImageUrl) && postOldImageUrl != imageUrl)
+                {
+                    await ImageUploader.DeleteCoverImageAsync(postOldImageUrl);
+                }
+
+                if (!string.IsNullOrEmpty(UserService.UserId))
+                {
+                    if (!string.IsNullOrEmpty(_currentDraftId))
+                        await BlogRepo.DeleteDraftByIdAsync(_currentDraftId);
+                    else
+                        await BlogRepo.DeleteDraftAsync(UserService.UserId!, PostId);
+                }
+
+                if (!string.IsNullOrEmpty(previousSavedUrl) && previousSavedUrl != imageUrl && previousSavedUrl != postOldImageUrl)
+                {
+                    _ = ImageUploader.DeleteCoverImageAsync(previousSavedUrl);
+                }
+
+                await JS.InvokeVoidAsync("setBeforeUnloadDirty", false);
+                Snackbar.Add("Post updated!", Severity.Success);
+                Navigation.NavigateTo($"/post/{PostId}");
+            }
+            else
+            {
+                var post = new BlogPost
+                {
+                    Title = title,
+                    Content = content,
+                    AuthorId = UserService.UserId ?? "",
+                    Visibility = visibility,
+                    Tags = tagList,
+                    Summary = string.IsNullOrWhiteSpace(summary) ? "" : summary.Trim(),
+                    ImageUrl = imageUrl,
+                    Slug = title.ToLower().Replace(" ", "-"),
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                await BlogRepo.CreateAsync(post);
+
+                if (!string.IsNullOrEmpty(UserService.UserId))
+                {
+                    if (!string.IsNullOrEmpty(_currentDraftId))
+                        await BlogRepo.DeleteDraftByIdAsync(_currentDraftId);
+                    else
+                        await BlogRepo.DeleteDraftAsync(UserService.UserId!, null);
+                }
+
+                if (!string.IsNullOrEmpty(previousSavedUrl) && previousSavedUrl != imageUrl)
+                {
+                    _ = ImageUploader.DeleteCoverImageAsync(previousSavedUrl);
+                }
+
+                await JS.InvokeVoidAsync("setBeforeUnloadDirty", false);
+                Snackbar.Add("Post published!", Severity.Success);
+                Navigation.NavigateTo("/");
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving post: {ex.Message}", Severity.Error);
+            _isSavingOrPublishing = false;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

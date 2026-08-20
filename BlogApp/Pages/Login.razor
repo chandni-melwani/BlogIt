@@ -1,0 +1,139 @@
+@using MudBlazor
+@page "/login"
+@implements IDisposable
+@using BlogApp.Services
+@inject UserService UserService
+@inject BlogApp.Data.UserProfileRepository ProfileRepo
+@inject NavigationManager Navigation
+@inject Supabase.Client SupabaseClient
+@inject Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedLocalStorage Storage
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="pt-4 pb-16">
+    <MudCard>
+        <MudCardContent>
+            <MudText Typo="Typo.h5" Align="Align.Center" Class="mb-4">
+                Sign In
+            </MudText>
+
+            <MudTextField @bind-Value="email"
+                          Label="Email"
+                          Variant="Variant.Outlined"
+                          Class="mb-3" />
+
+            <MudTextField @bind-Value="password"
+                          Label="Password"
+                          Variant="Variant.Outlined"
+                          InputType="@passwordInputType"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@passwordIcon"
+                          OnAdornmentClick="TogglePassword"
+                          Class="mb-3" />
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3">
+                    @errorMessage
+                </MudAlert>
+            }
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       OnClick="HandleLogin">
+                Sign In
+            </MudButton>
+
+            <MudText Align="Align.Center" Class="mt-3">
+                Don't have an account? 
+                <MudLink Href="/signup">Sign Up</MudLink>
+            </MudText>
+        </MudCardContent>
+    </MudCard>
+</MudContainer>
+
+@code {
+    private string email = "";
+    private string password = "";
+    private string errorMessage = "";
+    private bool _isDisposed = false;
+
+    protected override void OnInitialized()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+
+        if (UserService.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private void OnSessionReady()
+    {
+        if (_isDisposed) return;
+
+        InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+
+            if (UserService.IsLoggedIn)
+            {
+                Navigation.NavigateTo("/");
+            }
+        });
+    }
+
+    private async Task HandleLogin()
+    {
+        try
+        {
+            var session = await SupabaseClient.Auth.SignIn(email, password);
+            if (session?.User != null)
+            {
+                UserService.UserId = session.User.Id;
+                UserService.Email = session.User.Email;
+                UserService.AccessToken = session.AccessToken;
+                UserService.RefreshToken = session.RefreshToken;
+
+                // Cache the username now so notifications sent later in this same
+                // session (e.g. following someone right after login) don't fall
+                // back to a truncated userId.
+                var profile = await ProfileRepo.GetByUserIdAsync(session.User.Id);
+                UserService.Username = profile?.Username;
+
+                // Save tokens BEFORE navigating away
+                await Storage.SetAsync("access_token", session.AccessToken!);
+                await Storage.SetAsync("refresh_token", session.RefreshToken!);
+
+                Navigation.NavigateTo("/");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Login error: {ex.Message}");
+            errorMessage = "Invalid email or password.";
+        }
+    }
+
+    private InputType passwordInputType = InputType.Password;
+    private string passwordIcon = Icons.Material.Filled.VisibilityOff;
+
+    private void TogglePassword()
+    {
+        if (passwordInputType == InputType.Password)
+        {
+            passwordInputType = InputType.Text;
+            passwordIcon = Icons.Material.Filled.Visibility;
+        }
+        else
+        {
+            passwordInputType = InputType.Password;
+            passwordIcon = Icons.Material.Filled.VisibilityOff;
+        }
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        UserService.OnSessionReady -= OnSessionReady;
+    }
+}

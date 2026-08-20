@@ -1,0 +1,27 @@
+@namespace BlogApp.Components.Shared
+
+@*
+    Renders the avatar circle with the first letter of the user's display name.
+
+    Parameters:
+      DisplayName  — the raw display name or username string (@ prefix is stripped automatically)
+      Size         — "sm" | "md" | "lg" — maps to global CSS classes avatar-circle-sm/md/lg
+*@
+
+<div class="@($"avatar-circle avatar-circle-{Size}")">@_initial</div>
+
+@code {
+    /// <summary>The display name or username to derive the initial from.</summary>
+    [Parameter] public string DisplayName { get; set; } = "";
+
+    /// <summary>Size variant: "sm" (36px), "md" (44px), or "lg" (84px).</summary>
+    [Parameter] public string Size { get; set; } = "sm";
+
+    private string _initial = "?";
+
+    protected override void OnParametersSet()
+    {
+        var name = DisplayName.TrimStart('@');
+        _initial = string.IsNullOrEmpty(name) ? "?" : name.Substring(0, 1).ToUpper();
+    }
+}

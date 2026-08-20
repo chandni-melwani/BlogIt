@@ -1,0 +1,116 @@
+@*
+    Branded loading indicator — reveals each letter of "blogIt" one by one,
+    like a typewriter, then fades out and loops.
+    Usage: <LoadingLogo />
+*@
+@implements IDisposable
+
+<div class="loading-logo-wrap">
+    <div class="loading-logo" role="status" aria-label="Loading">
+        @foreach (var (letter, i) in _word.Select((c, i) => (c, i)))
+        {
+            <span class="loading-letter @(i < _visibleCount ? "ll-visible" : "") @(_fading ? "ll-fading" : "")">
+                @letter
+            </span>
+        }
+    </div>
+</div>
+
+<style>
+    .loading-logo-wrap {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: calc(100vh - 64px);
+        width: 100%;
+    }
+
+    .loading-logo {
+        font-family: 'Playfair Display', serif;
+        font-weight: 600;
+        font-size: 2.5rem;
+        color: #2F4B3C;
+        color: var(--color-accent, #2F4B3C);
+        display: inline-flex;
+        letter-spacing: 3px;
+    }
+
+    /* Each letter starts invisible and slightly below */
+    .loading-letter {
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 0.12s ease, transform 0.12s ease;
+        display: inline-block;
+    }
+
+    /* Revealed state */
+    .loading-letter.ll-visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    /* Fade-out state — all letters fade together */
+    .loading-letter.ll-fading {
+        opacity: 0;
+        transform: translateY(-4px);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+</style>
+
+@code {
+    private const string _word = "blogIt";
+
+    // How many letters are currently visible
+    private int _visibleCount = 0;
+
+    // Whether we're in the "fade everything out" phase
+    private bool _fading = false;
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        // Tick every 130ms — each tick reveals one more letter
+        _timer = new System.Threading.Timer(OnTick, null,
+            dueTime: 200,       // small initial pause before first letter
+            period: 130);       // 130ms between each letter appearing
+    }
+
+    private async void OnTick(object? _)
+    {
+        if (_fading) return; // ignore ticks while fading out
+
+        _visibleCount++;
+
+        if (_visibleCount > _word.Length)
+        {
+            // All letters visible — pause, then fade out and reset
+            _timer?.Change(Timeout.Infinite, Timeout.Infinite); // stop ticks
+            await InvokeAsync(StateHasChanged);
+
+            await Task.Delay(600);  // hold all letters visible for 600ms
+
+            _fading = true;
+            await InvokeAsync(StateHasChanged);
+
+            await Task.Delay(350);  // let the fade-out transition finish
+
+            // Reset for next loop
+            _fading = false;
+            _visibleCount = 0;
+            await InvokeAsync(StateHasChanged);
+
+            // Restart ticking
+            _timer?.Change(200, 130);
+        }
+        else
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}

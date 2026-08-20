@@ -1,0 +1,355 @@
+@page "/drafts"
+@implements IDisposable
+@using BlogApp.Models
+@using BlogApp.Services
+@using BlogApp.Data
+@using MudBlazor
+@inject BlogRepository BlogRepo
+@inject UserService UserService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject ImageUploadService ImageUploader
+
+<div class="drafts-page">
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-6 mb-12">
+        <div style="display:flex; align-items:center; justify-space-between;" class="mb-4">
+            <MudText Class="page-heading">Your Drafts</MudText>
+        </div>
+
+        @if (isLoading)
+        {
+            <LoadingLogo />
+        }
+        else if (drafts.Count == 0)
+        {
+            <div class="empty-state-box pa-8 text-center">
+                <MudIcon Icon="@Icons.Material.Outlined.Drafts" Style="font-size:3.2rem;" Class="empty-icon mb-2" />
+                <MudText Typo="Typo.h6" Class="empty-title">No drafts saved</MudText>
+                <MudText Typo="Typo.body2" Class="empty-subtitle mt-1">
+                    Drafts you save while writing will appear here.
+                </MudText>
+                <MudButton Variant="Variant.Filled" Class="btn-accent-filled mt-4" Href="/editor">
+                    Write a post
+                </MudButton>
+            </div>
+        }
+        else
+        {
+            <div style="display:flex; flex-direction:column; gap:16px;">
+                @foreach (var draft in drafts)
+                {
+                    <div class="draft-card pa-4">
+                        <div style="display:flex; gap:16px; align-items:flex-start;">
+                            <div style="flex:1; min-width:0;">
+                                <div class="draft-card-header mb-2">
+                                    <span class="@($"draft-type-badge {(draft.PostId == null ? "badge-new" : "badge-edit")}")">
+                                        @(draft.PostId == null ? "New Post Draft" : "Edit Draft")
+                                    </span>
+                                    <span class="meta-text">
+                                        Updated @draft.UpdatedAt.ToLocalTime().ToString("dd MMM yyyy · hh:mm tt")
+                                    </span>
+                                </div>
+
+                                <div class="draft-title mb-1" @onclick="() => OpenDraft(draft)">
+                                    @(string.IsNullOrWhiteSpace(draft.Title) ? "Untitled draft" : draft.Title)
+                                </div>
+
+                                <p class="draft-preview mb-3" @onclick="() => OpenDraft(draft)">
+                                    @MarkdownHelper.GetCardPreview(draft.Summary, draft.Content)
+                                </p>
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(draft.ImageUrl))
+                            {
+                                <div class="draft-thumbnail-wrap" @onclick="() => OpenDraft(draft)">
+                                    <img src="@draft.ImageUrl" alt="Draft cover" class="draft-thumbnail" />
+                                </div>
+                            }
+                        </div>
+
+                        <div class="draft-actions">
+                            <MudButton Variant="Variant.Outlined"
+                                       Class="btn-outline-neutral"
+                                       Size="Size.Small"
+                                       OnClick="() => OpenDraft(draft)">
+                                Resume Draft
+                            </MudButton>
+
+                            @if (deletingDraftId != draft.Id)
+                            {
+                                <MudTooltip Text="Delete draft">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete"
+                                                   Class="error-icon"
+                                                   Size="Size.Small"
+                                                   OnClick="() => deletingDraftId = draft.Id" />
+                                </MudTooltip>
+                            }
+                            else
+                            {
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <MudText Typo="Typo.caption" Class="delete-confirm-text">Delete?</MudText>
+                                    <MudButton Variant="Variant.Filled"
+                                               Class="btn-error-filled"
+                                               Size="Size.Small"
+                                               OnClick="() => ConfirmDeleteDraft(draft)">
+                                        Yes
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Class="btn-outline-neutral"
+                                               Size="Size.Small"
+                                               OnClick="() => deletingDraftId = null">
+                                        No
+                                    </MudButton>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </MudContainer>
+</div>
+
+<style>
+    .drafts-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .page-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.6rem;
+        color: var(--color-text-primary);
+        letter-spacing: -0.3px;
+        display: block;
+    }
+
+    .empty-state-box {
+        border: 1px dashed var(--color-border);
+        border-radius: 12px;
+        background: var(--color-surface);
+    }
+
+    .empty-icon {
+        color: var(--color-text-muted) !important;
+    }
+
+    .empty-title {
+        font-family: 'Playfair Display', serif;
+        color: var(--color-text-primary) !important;
+    }
+
+    .empty-subtitle {
+        color: var(--color-text-secondary) !important;
+    }
+
+    .draft-card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 10px;
+        transition: border-color 0.15s ease;
+    }
+
+    .draft-card:hover {
+        border-color: var(--color-text-muted);
+    }
+
+    .draft-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .draft-type-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .badge-new {
+        background: color-mix(in srgb, var(--color-success) 14%, transparent);
+        color: var(--color-success);
+    }
+
+    .badge-edit {
+        background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+        color: var(--color-accent);
+    }
+
+    .draft-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 600;
+        font-size: 1.15rem;
+        color: var(--color-text-primary);
+        cursor: pointer;
+    }
+
+    .draft-title:hover {
+        color: var(--color-accent);
+    }
+
+    .draft-preview {
+        font-size: 0.85rem;
+        color: var(--color-text-secondary);
+        line-height: 1.5;
+        cursor: pointer;
+        margin: 0;
+    }
+
+    .draft-thumbnail-wrap {
+        flex: 0 0 auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        overflow: hidden;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+    }
+
+    .draft-thumbnail {
+        width: auto;
+        height: auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        object-fit: contain;
+        display: block;
+    }
+
+    .draft-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+        padding-top: 10px;
+        margin-top: 10px;
+    }
+
+    .meta-text {
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+    }
+
+    .error-icon {
+        color: var(--color-error) !important;
+    }
+
+    .delete-confirm-text {
+        color: var(--color-error) !important;
+        font-weight: 600;
+    }
+
+    .btn-accent-filled {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-error-filled {
+        background: var(--color-error) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-neutral {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+    }
+</style>
+
+@code {
+    private List<Draft> drafts = new();
+    private bool isLoading = true;
+    private string? deletingDraftId = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+
+        if (UserService.IsLoggedIn)
+        {
+            await LoadDrafts();
+        }
+        else
+        {
+            isLoading = false;
+        }
+    }
+
+    private async void OnSessionReady()
+    {
+        await InvokeAsync(async () =>
+        {
+            if (UserService.IsLoggedIn)
+            {
+                await LoadDrafts();
+                StateHasChanged();
+            }
+            else
+            {
+                Navigation.NavigateTo("/login");
+            }
+        });
+    }
+
+    private async Task LoadDrafts()
+    {
+        if (string.IsNullOrEmpty(UserService.UserId))
+        {
+            isLoading = false;
+            return;
+        }
+        drafts = await BlogRepo.GetDraftsByUserIdAsync(UserService.UserId!);
+        isLoading = false;
+    }
+
+    private void OpenDraft(Draft draft)
+    {
+        if (draft.PostId == null)
+        {
+            Navigation.NavigateTo($"/editor?draftId={draft.Id}&loadDraft=true");
+        }
+        else
+        {
+            Navigation.NavigateTo($"/editor/{draft.PostId}?loadDraft=true");
+        }
+    }
+
+    private async Task ConfirmDeleteDraft(Draft draft)
+    {
+        if (string.IsNullOrEmpty(UserService.UserId)) return;
+
+        if (!string.IsNullOrEmpty(draft.ImageUrl))
+        {
+            _ = ImageUploader.DeleteCoverImageAsync(draft.ImageUrl);
+        }
+
+        if (!string.IsNullOrEmpty(draft.Id))
+        {
+            await BlogRepo.DeleteDraftByIdAsync(draft.Id);
+        }
+        else
+        {
+            await BlogRepo.DeleteDraftAsync(UserService.UserId!, draft.PostId);
+        }
+
+        drafts.RemoveAll(d => d.Id == draft.Id);
+        deletingDraftId = null;
+        Snackbar.Add("Draft deleted.", Severity.Info);
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        UserService.OnSessionReady -= OnSessionReady;
+    }
+}

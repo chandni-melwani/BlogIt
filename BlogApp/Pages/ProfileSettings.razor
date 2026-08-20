@@ -1,0 +1,276 @@
+@page "/settings"
+@implements IDisposable
+@using BlogApp.Models
+@using BlogApp.Data
+@using BlogApp.Services
+@using MudBlazor
+@inject UserProfileRepository ProfileRepo
+@inject UserService UserService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>Profile Settings | BlogIt</PageTitle>
+
+<div class="settings-page">
+    <MudContainer MaxWidth="MaxWidth.Small" Class="pt-8 pb-12">
+
+        <MudText Class="settings-heading mb-6">Profile Settings</MudText>
+
+        @if (isLoading)
+        {
+            <div class="loading-wrap">
+                <MudProgressCircular Indeterminate="true" Class="accent-spinner" />
+            </div>
+        }
+        else
+        {
+            <div class="settings-card">
+                <MudStack Spacing="5">
+
+                    @* ── Avatar preview ── *@
+                    <MudStack AlignItems="AlignItems.Center" Class="mb-1">
+                        <div class="settings-avatar">
+                            @((username.Length > 0 ? username : "?").Substring(0, 1).ToUpper())
+                        </div>
+                        @if (!string.IsNullOrEmpty(username))
+                        {
+                            <span class="settings-handle">@@@username</span>
+                        }
+                    </MudStack>
+
+                    <div class="settings-divider"></div>
+
+                    @* ── Username ── *@
+                    <MudTextField @bind-Value="username"
+                                  Label="Username"
+                                  Placeholder="e.g. chandni"
+                                  Variant="Variant.Outlined"
+                                  Adornment="Adornment.Start"
+                                  AdornmentText="@("@")"
+                                  HelperText="Unique handle — lowercase letters, numbers, underscores only"
+                                  Immediate="true" />
+
+                    @* ── Bio ── *@
+                    <MudTextField @bind-Value="bio"
+                                  Label="Bio"
+                                  Placeholder="Tell people a little about yourself..."
+                                  Variant="Variant.Outlined"
+                                  Lines="3"
+                                  MaxLength="150"
+                                  HelperText="@($"{bio.Length}/150")"
+                                  Immediate="true" />
+
+                    @* ── Error message ── *@
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <MudAlert Severity="Severity.Error" Class="settings-alert">@errorMessage</MudAlert>
+                    }
+
+                    @* ── Save button ── *@
+                    <button class="settings-save-btn"
+                            @onclick="SaveProfile"
+                            disabled="@isSaving">
+                        @(isSaving ? "Saving…" : "Save Changes")
+                    </button>
+
+                </MudStack>
+            </div>
+        }
+
+    </MudContainer>
+</div>
+
+<style>
+    .settings-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .settings-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.35rem;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    /* ── Card ──────────────────────────────────── */
+    .settings-card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        padding: 32px;
+    }
+
+    .settings-divider {
+        height: 1px;
+        background: var(--color-border);
+        margin: 4px 0 8px;
+    }
+
+    /* ── Avatar ─────────────────────────────────── */
+    .settings-avatar {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: var(--color-accent);
+        color: #FFFFFF;
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 8px rgba(47,75,60,0.18);
+    }
+
+    .settings-handle {
+        font-size: 0.85rem;
+        color: var(--color-text-secondary);
+        font-weight: 500;
+        margin-top: 4px;
+    }
+
+    /* ── Save button ─────────────────────────────── */
+    .settings-save-btn {
+        display: block;
+        width: 100%;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        background: var(--color-accent);
+        color: #FFFFFF;
+        font-family: inherit;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+        letter-spacing: 0.01em;
+    }
+
+    .settings-save-btn:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--color-accent) 85%, #000);
+    }
+
+    .settings-save-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
+
+    /* ── Loading ─────────────────────────────────── */
+    .loading-wrap {
+        display: flex;
+        justify-content: center;
+        padding: 48px 0;
+    }
+
+    .accent-spinner {
+        color: var(--color-accent) !important;
+    }
+
+    /* ── Alert ───────────────────────────────────── */
+    .settings-alert {
+        border-radius: 8px;
+    }
+
+    /* ── MudTextField theme alignment ──────────────
+     * Scoped to .settings-card so other pages aren't affected */
+    .settings-card .mud-input-outlined .mud-input-outlined-border {
+        border-color: var(--color-border) !important;
+    }
+
+    .settings-card .mud-input-label {
+        color: var(--color-text-secondary) !important;
+    }
+
+    .settings-card .mud-helper-text {
+        color: var(--color-text-muted) !important;
+    }
+</style>
+
+@code {
+    private string username = "";
+    private string bio = "";
+    private string errorMessage = "";
+    private bool isLoading = true;
+    private bool isSaving = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+
+        if (UserService.IsLoggedIn)
+        {
+            await LoadSettings();
+        }
+    }
+
+    private async void OnSessionReady()
+    {
+        await InvokeAsync(async () =>
+        {
+            if (UserService.IsLoggedIn)
+            {
+                await LoadSettings();
+                StateHasChanged();
+            }
+            else
+            {
+                Navigation.NavigateTo("/login");
+            }
+        });
+    }
+
+    private async Task LoadSettings()
+    {
+        var existing = await ProfileRepo.GetByUserIdAsync(UserService.UserId!);
+        if (existing != null)
+        {
+            username = existing.Username;
+            bio = existing.Bio;
+        }
+
+        isLoading = false;
+    }
+
+    private async Task SaveProfile()
+    {
+        errorMessage = "";
+
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            errorMessage = "Username cannot be empty.";
+            return;
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(username, @"^[a-z0-9_]+$"))
+        {
+            errorMessage = "Username can only contain lowercase letters, numbers, and underscores.";
+            return;
+        }
+
+        if (await ProfileRepo.IsUsernameTakenAsync(username, UserService.UserId!))
+        {
+            errorMessage = $"@{username} is already taken. Try another.";
+            return;
+        }
+
+        isSaving = true;
+
+        await ProfileRepo.UpsertAsync(new BlogApp.Models.UserProfile
+        {
+            UserId = UserService.UserId!,
+            Username = username.Trim().ToLower(),
+            Bio = bio.Trim()
+        });
+
+        isSaving = false;
+        Snackbar.Add("Profile saved! ✅", Severity.Success);
+    }
+
+    public void Dispose()
+    {
+        UserService.OnSessionReady -= OnSessionReady;
+    }
+}

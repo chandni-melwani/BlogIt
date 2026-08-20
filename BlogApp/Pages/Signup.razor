@@ -1,0 +1,183 @@
+@using MudBlazor
+@page "/signup"
+@implements IDisposable
+@using BlogApp.Services
+@using BlogApp.Data
+@using BlogApp.Models
+@inject UserService UserService
+@inject NavigationManager Navigation
+@inject Supabase.Client SupabaseClient
+@inject UserProfileRepository ProfileRepo
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="pt-4 pb-16">
+    <MudCard>
+        <MudCardContent>
+            <MudText Typo="Typo.h5" Align="Align.Center" Class="mb-4">
+                Create Account
+            </MudText>
+
+            <MudTextField @bind-Value="username"
+                          Label="Username"
+                          Placeholder="e.g. chandni"
+                          Variant="Variant.Outlined"
+                          Adornment="Adornment.Start"
+                          AdornmentText="@("@")"
+                          HelperText="Lowercase letters, numbers, underscores only"
+                          Class="mb-3" />
+
+            <MudTextField @bind-Value="email"
+                          Label="Email"
+                          Variant="Variant.Outlined"
+                          Class="mb-3" />
+
+            <MudTextField @bind-Value="password"
+                          Label="Password"
+                          Variant="Variant.Outlined"
+                          InputType="@passwordInputType"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@passwordIcon"
+                          OnAdornmentClick="TogglePassword"
+                          Class="mb-3" />
+
+            <MudTextField @bind-Value="confirmPassword"
+                          Label="Confirm Password"
+                          Variant="Variant.Outlined"
+                          InputType="InputType.Password"
+                          Class="mb-3" />
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3">
+                    @errorMessage
+                </MudAlert>
+            }
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       OnClick="HandleSignUp">
+                Sign Up
+            </MudButton>
+
+            <MudText Align="Align.Center" Class="mt-3">
+                Already have an account?
+                <MudLink Href="/login">Sign In</MudLink>
+            </MudText>
+        </MudCardContent>
+    </MudCard>
+</MudContainer>
+
+@code {
+    private string username = "";
+    private string email = "";
+    private string password = "";
+    private string confirmPassword = "";
+    private string errorMessage = "";
+    private bool _isDisposed = false;
+
+    protected override void OnInitialized()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+
+        if (UserService.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private void OnSessionReady()
+    {
+        if (_isDisposed) return;
+
+        InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+
+            if (UserService.IsLoggedIn)
+            {
+                Navigation.NavigateTo("/");
+            }
+        });
+    }
+
+    private InputType passwordInputType = InputType.Password;
+    private string passwordIcon = Icons.Material.Filled.VisibilityOff;
+
+    private async Task HandleSignUp()
+    {
+        try
+        {
+            // Basic validation
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                errorMessage = "Username is required.";
+                return;
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(username, @"^[a-z0-9_]+$"))
+            {
+                errorMessage = "Username can only contain lowercase letters, numbers, and underscores.";
+                return;
+            }
+
+            if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
+            {
+                errorMessage = "Email and password are required.";
+                return;
+            }
+
+            if (password != confirmPassword)
+            {
+                errorMessage = "Passwords do not match.";
+                return;
+            }
+
+            // Check if username is already taken
+            if (await ProfileRepo.IsUsernameTakenAsync(username, ""))
+            {
+                errorMessage = $"@{username} is already taken. Try another.";
+                return;
+            }
+
+            // Create Supabase auth account
+            var session = await SupabaseClient.Auth.SignUp(email, password);
+
+            if (session?.User != null)
+            {
+                // Save username to MongoDB immediately after account creation
+                await ProfileRepo.UpsertAsync(new BlogApp.Models.UserProfile
+                {
+                    UserId   = session.User.Id,
+                    Username = username.Trim().ToLower(),
+                    Bio      = ""
+                });
+
+                Navigation.NavigateTo("/login");
+            }
+        }
+        catch (Exception)
+        {
+            errorMessage = "An account with this email already exists.";
+        }
+    }
+
+    private void TogglePassword()
+    {
+        if (passwordInputType == InputType.Password)
+        {
+            passwordInputType = InputType.Text;
+            passwordIcon = Icons.Material.Filled.Visibility;
+        }
+        else
+        {
+            passwordInputType = InputType.Password;
+            passwordIcon = Icons.Material.Filled.VisibilityOff;
+        }
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        UserService.OnSessionReady -= OnSessionReady;
+    }
+}

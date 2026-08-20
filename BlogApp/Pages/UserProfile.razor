@@ -1,0 +1,991 @@
+@page "/profile/{UserId}"
+@implements IDisposable
+@using BlogApp.Models
+@using BlogApp.Data
+@using BlogApp.Services
+@using MudBlazor
+@inject BlogRepository BlogRepo
+@inject ConnectionRepository ConnectionRepo
+@inject UserProfileRepository ProfileRepo
+@inject UserService UserService
+@inject NavigationManager Navigation
+@inject NotificationService NotificationSvc
+@inject EngagementRepository EngageRepo
+
+<div class="profile-page">
+    <MudContainer MaxWidth="MaxWidth.Large" Class="mt-6">
+
+        @if (isLoading)
+        {
+            <LoadingLogo />
+        }
+        else
+        {
+            @* ── Profile Header ────────────────────────────────────────────── *@
+            <div class="profile-header pa-6 mb-6">
+                <div style="display:flex; align-items:center; gap:24px;">
+
+                    @* Avatar — first letter of username, with upload affordance on own profile *@
+                    <div style="position:relative; flex-shrink:0;">
+                        <AvatarInitial DisplayName="@(profileOwner?.Username ?? UserId)" Size="lg" />
+                        @if (IsOwnProfile)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.CameraAlt"
+                                           Href="/settings"
+                                           Size="Size.Small"
+                                           Class="avatar-upload-btn" />
+                        }
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:8px; flex:1;">
+                        <MudText Class="profile-username">
+                            @(profileOwner != null ? profileOwner.Username : UserId.Substring(0, 8) + "...")
+                        </MudText>
+
+                        @* Posts / Followers / Following / Friends — identical visual weight, last three are clickable *@
+                        <div style="display:flex; align-items:center; gap:24px;">
+                            <MudText Class="stat-text">
+                                <span class="stat-num">@userPosts.Count</span>
+                                <span class="stat-label">posts</span>
+                            </MudText>
+                            <MudText Class="stat-text stat-clickable" @onclick='() => OpenList("followers")'>
+                                <span class="stat-num">@followerCount</span>
+                                <span class="stat-label">followers</span>
+                            </MudText>
+                            <MudText Class="stat-text stat-clickable" @onclick='() => OpenList("following")'>
+                                <span class="stat-num">@followingCount</span>
+                                <span class="stat-label">following</span>
+                            </MudText>
+                            <MudText Class="stat-text stat-clickable" @onclick='() => OpenList("friends")'>
+                                <span class="stat-num">@friendCount</span>
+                                <span class="stat-label">friends</span>
+                            </MudText>
+                        </div>
+                    </div>
+
+                    @* ── Action Buttons ──────────────────────────────────────── *@
+                    @if (!IsOwnProfile)
+                    {
+                        <div style="display:flex; gap:8px;">
+
+                            @* Follow / Unfollow Button *@
+                            @if (isFollowing)
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Class="btn-outline-neutral"
+                                           OnClick="UnfollowUser">
+                                    Following &#10003;
+                                </MudButton>
+                            }
+                            else
+                            {
+                                <MudButton Variant="Variant.Filled"
+                                           Class="btn-accent-filled"
+                                           OnClick="FollowUser">
+                                    Follow
+                                </MudButton>
+                            }
+
+                            @* Friend Request Button *@
+                            @if (friendStatus == "accepted")
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Class="btn-outline-success"
+                                           OnClick="Unfriend">
+                                    Friends &#10003;
+                                </MudButton>
+                            }
+                            else if (friendStatus == "pending_sent")
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Class="btn-outline-muted"
+                                           OnClick="CancelFriendRequest">
+                                    Request Sent
+                                </MudButton>
+                            }
+                            else if (friendStatus == "pending_received")
+                            {
+                                <MudButton Variant="Variant.Filled"
+                                           Class="btn-success-filled"
+                                           OnClick="AcceptRequest">
+                                    Accept Friend Request
+                                </MudButton>
+                            }
+                            else
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Class="btn-outline-accent"
+                                           OnClick="SendFriendRequest">
+                                    Add Friend
+                                </MudButton>
+                            }
+
+                        </div>
+                    }
+                    else
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Class="btn-outline-accent"
+                                   Href="/settings">
+                            Edit profile
+                        </MudButton>
+                    }
+                </div>
+            </div>
+
+            @* ── Pending Friend Requests (own profile only) ────────────────── *@
+            @if (IsOwnProfile && pendingRequests.Count > 0)
+            {
+                <MudText Class="section-heading mb-2">Friend Requests (@pendingRequests.Count)</MudText>
+                @foreach (var req in pendingRequests)
+                {
+                    <div class="request-row pa-3 mb-2">
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <AvatarInitial DisplayName="@requesterNames.GetValueOrDefault(req.FollowerUserId, "?")" Size="sm" />
+                            <MudLink Href="@($"/profile/{req.FollowerUserId}")" Class="request-name-link" Style="flex:1">
+                                @requesterNames.GetValueOrDefault(req.FollowerUserId, req.FollowerUserId.Substring(0, 8) + "...").TrimStart('@')
+                            </MudLink>
+                            <MudButton Variant="Variant.Filled" Class="btn-success-filled" Size="Size.Small"
+                                       OnClick="() => AcceptSpecificRequest(req.Id!)">
+                                Accept
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined" Class="btn-outline-error" Size="Size.Small"
+                                       OnClick="() => DeclineRequest(req.Id!)">
+                                Decline
+                            </MudButton>
+                        </div>
+                    </div>
+                }
+                <MudDivider Class="mb-4 mt-2" />
+            }
+
+            @* ── Posts / Saved tabs ───────────────────────────────────────── *@
+            <MudTabs Elevation="0" ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="OnTabChanged" Class="profile-tabs">
+                <MudTabPanel Text="POSTS">
+                    @if (userPosts.Count == 0)
+                    {
+                        <div class="empty-state-box pa-8 text-center mt-4">
+                            <MudIcon Icon="@Icons.Material.Outlined.CameraAlt" Size="Size.Large" Class="empty-icon" />
+                            <MudText Class="empty-title">
+                                @(IsOwnProfile ? "Share blogs" : "No posts yet")
+                            </MudText>
+                            <MudText Class="empty-subtitle mt-1">
+                                @(IsOwnProfile ? "When you share a blog, it will appear on your profile." : "This user hasn't shared anything yet.")
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <div style="display:flex; flex-direction:column; gap:20px; margin-top:8px;">
+                            @foreach (var post in userPosts)
+                            {
+                                var postId = post.Id;
+                                <div class="post-card" @onclick="@(() => Navigation.NavigateTo("/post/" + postId))" style="cursor:pointer;">
+                                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                                        <AvatarInitial DisplayName="@(profileOwner?.Username ?? UserId)" Size="sm" />
+                                        <div>
+                                            <span class="author-link-text">@(profileOwner?.Username ?? UserId)</span>
+                                            <span class="meta-text"> &middot; @post.CreatedAt.ToString("dd MMM yyyy")</span>
+                                        </div>
+                                        <span class="@("visibility-pill-sm " + GetVisibilityClass(post.Visibility))" style="margin-left:auto;">@post.Visibility</span>
+                                        @if (IsOwnProfile)
+                                        {
+                                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true"
+                                                     Class="muted-icon"
+                                                     AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                                                     @onclick:stopPropagation="true">
+                                                <MudMenuItem OnClick="@(() => Navigation.NavigateTo("/editor/" + postId))">Edit</MudMenuItem>
+                                                <MudMenuItem OnClick="@(() => Navigation.NavigateTo("/post/" + postId))">View</MudMenuItem>
+                                            </MudMenu>
+                                        }
+                                    </div>
+                                    <div class="post-card-body">
+                                        <div class="post-card-text">
+                                            <div class="post-title">@post.Title</div>
+                                            <p class="post-preview">@StripMarkdown(post.Content ?? "")</p>
+                                            @if (post.Tags is { Count: > 0 })
+                                            {
+                                                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                                    @foreach (var tag in post.Tags)
+                                                    {
+                                                        <span class="tag-text">#@tag</span>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(post.ImageUrl))
+                                        {
+                                            <div class="post-card-thumb">
+                                                <img src="@post.ImageUrl" alt="@post.Title" />
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </MudTabPanel>
+
+                @if (IsOwnProfile)
+                {
+                    <MudTabPanel Text="SAVED">
+                        @if (!savedPostsLoaded)
+                        {
+                            <LoadingLogo />
+                        }
+                        else if (savedPosts.Count == 0)
+                        {
+                            <div class="empty-state-box pa-8 text-center mt-4">
+                                <MudIcon Icon="@Icons.Material.Outlined.BookmarkBorder" Size="Size.Large" Class="empty-icon" />
+                                <MudText Class="empty-title">No saved posts</MudText>
+                                <MudText Class="empty-subtitle mt-1">
+                                    Posts you save will appear here. Only you can see this.
+                                </MudText>
+                            </div>
+                        }
+                        else
+                        {
+                            <div style="display:flex; flex-direction:column; gap:20px; margin-top:8px;">
+                                @foreach (var post in savedPosts)
+                                {
+                                    var savedPostId = post.Id;
+                                    <div class="post-card" @onclick="@(() => Navigation.NavigateTo("/post/" + savedPostId))" style="cursor:pointer;">
+                                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                                        <AvatarInitial DisplayName="@(post.AuthorId ?? "?")" Size="sm" />
+                                            <div>
+                                                <span class="author-link-text meta-text">@post.CreatedAt.ToString("dd MMM yyyy")</span>
+                                            </div>
+                                            <span class="@("visibility-pill-sm " + GetVisibilityClass(post.Visibility))" style="margin-left:auto;">@post.Visibility</span>
+                                        </div>
+                                        <div class="post-card-body">
+                                            <div class="post-card-text">
+                                                <div class="post-title">@post.Title</div>
+                                                <p class="post-preview">@MarkdownHelper.StripMarkdown(post.Content ?? "")</p>
+                                                @if (post.Tags is { Count: > 0 })
+                                                {
+                                                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                                        @foreach (var tag in post.Tags)
+                                                        {
+                                                            <span class="tag-text">#@tag</span>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                            @if (!string.IsNullOrEmpty(post.ImageUrl))
+                                            {
+                                                <div class="post-card-thumb">
+                                                    <img src="@post.ImageUrl" alt="@post.Title" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </MudTabPanel>
+                }
+            </MudTabs>
+        }
+    </MudContainer>
+</div>
+
+@* ── Followers / Following / Friends Overlay ──────────────────────────
+     Rendered OUTSIDE MudContainer so it isn't clipped by layout layers *@
+@if (listDialogOpen)
+{
+    <div class="dialog-backdrop" @onclick="CloseList">
+        @* Inner div stops backdrop click from closing when clicking inside the panel *@
+        <div @onclick:stopPropagation="true">
+            <div class="dialog-panel pa-6">
+                <MudText Class="dialog-title mb-4">@listDialogTitle</MudText>
+                @if (listDialogUsers.Count == 0)
+                {
+                    <MudText Class="empty-subtitle">Nobody here yet.</MudText>
+                }
+                else
+                {
+                    @foreach (var user in listDialogUsers)
+                    {
+                        <div style="display:flex; align-items:center; gap:8px;" class="mb-3">
+                            <AvatarInitial DisplayName="@user.Value" Size="sm" />
+                            <MudButton Variant="Variant.Text"
+                                       Href="@($"/profile/{user.Key}")"
+                                       OnClick="CloseList"
+                                       Class="list-name-btn"
+                                       Style="justify-content:flex-start; flex:1;">
+                                @user.Value
+                            </MudButton>
+                        </div>
+                    }
+                }
+                <MudDivider Class="mt-4 mb-3" />
+                <MudButton OnClick="CloseList" Variant="Variant.Outlined" Class="btn-outline-neutral" FullWidth="true">Close</MudButton>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .profile-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .profile-header {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+    }
+
+    /* avatar-circle-sm / avatar-circle-lg are defined globally in app.css */
+
+    .avatar-upload-btn {
+        position: absolute;
+        bottom: -2px;
+        right: -2px;
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        border: 2px solid var(--color-surface);
+        width: 28px;
+        height: 28px;
+        min-width: 28px;
+    }
+
+    .profile-username {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.4rem;
+        color: var(--color-text-primary);
+    }
+
+    .stat-text {
+        font-size: 0.88rem;
+    }
+
+    .stat-num {
+        font-weight: 600;
+        color: var(--color-text-primary);
+    }
+
+    .stat-label {
+        color: var(--color-text-secondary);
+        margin-left: 3px;
+    }
+
+    .stat-clickable {
+        cursor: pointer;
+    }
+
+        .stat-clickable:hover .stat-num,
+        .stat-clickable:hover .stat-label {
+            color: var(--color-accent);
+        }
+
+    .btn-accent-filled {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-accent {
+        border-color: var(--color-accent) !important;
+        color: var(--color-accent) !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-neutral {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+    }
+
+    .btn-success-filled {
+        background: var(--color-success) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-success {
+        border-color: var(--color-success) !important;
+        color: var(--color-success) !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-muted {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-muted) !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-error {
+        border-color: var(--color-error) !important;
+        color: var(--color-error) !important;
+        text-transform: none !important;
+    }
+
+    .section-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.1rem;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    .request-row {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+    }
+
+    .request-name-link {
+        color: var(--color-text-primary) !important;
+        font-weight: 500;
+    }
+
+    .profile-tabs {
+        color: var(--color-text-primary);
+    }
+
+    .empty-state-box {
+        border: 1px dashed var(--color-border);
+        border-radius: 12px;
+        background: var(--color-surface);
+    }
+
+    .empty-icon {
+        color: var(--color-text-muted) !important;
+        margin-bottom: 12px;
+    }
+
+    .empty-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.1rem;
+        color: var(--color-text-primary) !important;
+        display: block;
+    }
+
+    .empty-subtitle {
+        font-size: 0.85rem;
+        color: var(--color-text-secondary) !important;
+        display: block;
+    }
+
+    .dialog-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(35, 40, 31, 0.5);
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .dialog-panel {
+        min-width: 320px;
+        max-width: 420px;
+        max-height: 70vh;
+        overflow-y: auto;
+        background: var(--color-surface);
+        border-radius: 10px;
+        box-shadow: 0 8px 30px rgba(35, 40, 31, 0.2);
+    }
+
+    .dialog-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.15rem;
+        color: var(--color-text-primary);
+        display: block;
+    }
+
+    .list-name-btn {
+        color: var(--color-text-primary) !important;
+        text-transform: none !important;
+    }
+
+    /* ── Post cards (same style as Home feed) ──────── */
+    .post-card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        padding: 22px 24px;
+        transition: border-color 0.15s ease;
+    }
+
+    .post-card:hover {
+        border-color: var(--color-text-muted);
+    }
+
+    .post-card-body {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+    }
+
+    .post-card-text {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .post-card-thumb {
+        flex: 0 0 auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        overflow: hidden;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .post-card-thumb img {
+        width: auto;
+        height: auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        object-fit: contain;
+        display: block;
+    }
+
+    @@media (max-width: 480px) {
+        .post-card-thumb,
+        .post-card-thumb img {
+            max-width: 100px;
+            max-height: 90px;
+        }
+    }
+
+    .post-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.15rem;
+        color: var(--color-text-primary);
+        margin-bottom: 6px;
+        line-height: 1.35;
+    }
+
+    .post-preview {
+        font-size: 0.9rem;
+        color: var(--color-text-secondary);
+        line-height: 1.6;
+        margin-bottom: 10px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .tag-text {
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: var(--color-text-muted);
+    }
+
+    .author-link-text {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--color-text-primary);
+    }
+
+    .meta-text {
+        font-size: 0.78rem;
+        color: var(--color-text-muted);
+    }
+
+    .muted-icon {
+        color: var(--color-text-muted) !important;
+    }
+</style>
+
+@code {
+    [Parameter] public string UserId { get; set; } = "";
+
+    private bool isLoading = true;
+
+    // Profile data
+    private BlogApp.Models.UserProfile? profileOwner = null;
+    private string senderUsername = "";
+    private Dictionary<string, string> requesterNames = new();
+
+    // Posts + pending requests
+    private List<BlogPost> userPosts = new();
+    private List<UserConnection> pendingRequests = new();
+
+    // Counts
+    private int followerCount = 0;
+    private int followingCount = 0;
+    private int friendCount = 0;
+
+    // Relationship state
+    private bool isFollowing = false;
+    private string friendStatus = "none";
+    private string? pendingConnectionId = null;
+
+    // Dialog state
+    private bool listDialogOpen = false;
+    private string listDialogTitle = "";
+    private Dictionary<string, string> listDialogUsers = new();
+
+    private bool _isDisposed = false;
+
+    private int activeTabIndex = 0;
+    private List<BlogPost> savedPosts = new();
+    private bool savedPostsLoaded = false;
+
+    // Compares trimmed lowercase to avoid whitespace/casing mismatches
+    private bool IsOwnProfile =>
+        UserId.Trim().ToLower() == (UserService.UserId ?? "").Trim().ToLower();
+
+    // Track the last loaded UserId so we can detect parameter changes
+    private string _lastUserId = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+        _lastUserId = UserId;
+
+        await LoadPublicProfileData();
+
+        if (UserService.IsLoggedIn)
+        {
+            await LoadRelationshipState();
+            isLoading = false;
+        }
+        // If not logged in yet, leave isLoading = true
+        // OnSessionReady will set it to false when ready
+    }
+
+    private async Task LoadPublicProfileData()
+    {
+        var allPostsTask = BlogRepo.GetByAuthorIdAsync(UserId);
+        var followersTask = ConnectionRepo.GetFollowersAsync(UserId);
+        var followingTask = ConnectionRepo.GetFollowingAsync(UserId);
+        var friendsTask = ConnectionRepo.GetFriendsAsync(UserId);
+
+        await Task.WhenAll(allPostsTask, followersTask, followingTask, friendsTask);
+
+        var allPosts = allPostsTask.Result;
+        followerCount = followersTask.Result.Count;
+        followingCount = followingTask.Result.Count;
+        friendCount = friendsTask.Result.Count;
+
+        profileOwner = await ProfileRepo.GetByUserIdAsync(UserId);
+
+        // Filter posts by visibility — session-dependent part
+        if (IsOwnProfile)
+        {
+            userPosts = allPosts;
+        }
+        else
+        {
+            bool viewerFollows = UserService.IsLoggedIn &&
+                await ConnectionRepo.IsFollowingAsync(UserService.UserId!, UserId);
+
+            bool viewerIsFriend = false;
+            if (UserService.IsLoggedIn)
+            {
+                var friends = friendsTask.Result;
+                viewerIsFriend = friends.Any(c =>
+                    c.FollowerUserId == UserService.UserId ||
+                    c.FollowingUserId == UserService.UserId);
+            }
+
+            userPosts = allPosts.Where(p =>
+            {
+                if (p.Visibility == "Public") return true;
+                if (p.Visibility == "Followers" && viewerFollows) return true;
+                if (p.Visibility == "Private" && viewerIsFriend) return true;
+                return false;
+            }).ToList();
+        }
+
+        // Newest first — GetByAuthorIdAsync doesn't guarantee order
+        userPosts = userPosts.OrderByDescending(p => p.CreatedAt).ToList();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (UserId != _lastUserId)
+        {
+            _lastUserId = UserId;
+            isLoading = true;
+            listDialogOpen = false;
+
+            isFollowing = false;
+            friendStatus = "none";
+            pendingConnectionId = null;
+            pendingRequests = new();
+            requesterNames = new();
+
+            await LoadPublicProfileData();
+
+            if (UserService.IsLoggedIn)
+            {
+                await LoadRelationshipState();
+            }
+
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async void OnSessionReady()
+    {
+        if (_isDisposed) return;
+
+        await InvokeAsync(async () =>
+        {
+            if (_isDisposed) return;
+
+            await LoadPublicProfileData();
+            await LoadRelationshipState();
+
+            if (IsOwnProfile)
+            {
+                pendingRequests = await ConnectionRepo.GetPendingRequestsAsync(UserId);
+                if (pendingRequests.Count > 0)
+                {
+                    var requesterIds = pendingRequests.Select(r => r.FollowerUserId).ToList();
+                    requesterNames = await ProfileRepo.GetDisplayNamesAsync(requesterIds);
+                }
+            }
+
+            isLoading = false;
+            StateHasChanged();
+        });
+    }
+
+
+
+    /// <summary>
+    /// Loads follow/friend relationship state between current user and profile owner.
+    /// Safe to call multiple times (idempotent).
+    /// </summary>
+    private async Task LoadRelationshipState()
+    {
+        // Load sender username (for notification messages)
+        if (UserService.IsLoggedIn)
+        {
+            var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+            senderUsername = myUsername;
+        }
+
+        if (!IsOwnProfile && UserService.IsLoggedIn)
+        {
+            isFollowing = await ConnectionRepo.IsFollowingAsync(UserService.UserId!, UserId);
+
+            var sentRequest = await ConnectionRepo.GetConnectionAsync(UserService.UserId!, UserId);
+            var receivedRequest = await ConnectionRepo.GetConnectionAsync(UserId, UserService.UserId!);
+
+            if (sentRequest?.Type == "friend" && sentRequest.Status == "accepted")
+                friendStatus = "accepted";
+            else if (receivedRequest?.Type == "friend" && receivedRequest.Status == "accepted")
+                friendStatus = "accepted";
+            else if (sentRequest?.Type == "friend" && sentRequest.Status == "pending")
+                friendStatus = "pending_sent";
+            else if (receivedRequest?.Type == "friend" && receivedRequest.Status == "pending")
+            {
+                friendStatus = "pending_received";
+                pendingConnectionId = receivedRequest.Id;
+            }
+            else
+            {
+                friendStatus = "none";
+            }
+        }
+
+        // If we're now on our own profile but loaded with stale data, also load pending requests
+        if (IsOwnProfile && pendingRequests.Count == 0)
+        {
+            pendingRequests = await ConnectionRepo.GetPendingRequestsAsync(UserId);
+            if (pendingRequests.Count > 0)
+            {
+                var requesterIds = pendingRequests.Select(r => r.FollowerUserId).ToList();
+                requesterNames = await ProfileRepo.GetDisplayNamesAsync(requesterIds);
+            }
+        }
+    }
+
+    private async Task FollowUser()
+    {
+        if (isFollowing || IsOwnProfile) return;
+
+        await ConnectionRepo.FollowAsync(UserService.UserId!, UserId);
+        isFollowing = true;
+        followerCount++;
+
+        await NotificationSvc.SendAsync(
+            toUserId: UserId,
+            fromUserId: UserService.UserId!,
+            message: $"{senderUsername} started following you",
+            type: "follow"
+        );
+    }
+
+    private async Task UnfollowUser()
+    {
+        await ConnectionRepo.UnfollowAsync(UserService.UserId!, UserId);
+        isFollowing = false;
+        followerCount--;
+    }
+
+    private async Task SendFriendRequest()
+    {
+        if (IsOwnProfile) return;
+
+        await ConnectionRepo.SendFriendRequestAsync(UserService.UserId!, UserId);
+        friendStatus = "pending_sent";
+
+        await NotificationSvc.SendAsync(
+            toUserId: UserId,
+            fromUserId: UserService.UserId!,
+            message: $"{senderUsername} sent you a friend request",
+            type: "friend_request"
+        );
+    }
+
+    private async Task AcceptRequest()
+    {
+        if (pendingConnectionId is not null)
+        {
+            await ConnectionRepo.AcceptFriendRequestAsync(pendingConnectionId);
+            friendStatus = "accepted";
+            friendCount++;
+
+            await NotificationSvc.SendAsync(
+                toUserId: UserId,
+                fromUserId: UserService.UserId!,
+                message: $"{senderUsername} accepted your friend request",
+                type: "friend_request"
+            );
+        }
+    }
+
+    private async Task AcceptSpecificRequest(string connectionId)
+    {
+        var req = pendingRequests.FirstOrDefault(r => r.Id == connectionId);
+
+        await ConnectionRepo.AcceptFriendRequestAsync(connectionId);
+        pendingRequests.RemoveAll(r => r.Id == connectionId);
+        friendCount++;
+
+        if (req is not null)
+        {
+            var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+            await NotificationSvc.SendAsync(
+                toUserId: req.FollowerUserId,
+                fromUserId: UserService.UserId!,
+                message: $"{myUsername} accepted your friend request",
+                type: "friend_request"
+            );
+        }
+    }
+
+    private async Task DeclineRequest(string connectionId)
+    {
+        await ConnectionRepo.DeclineFriendRequestAsync(connectionId);
+        pendingRequests.RemoveAll(r => r.Id == connectionId);
+    }
+
+    private async Task Unfriend()
+    {
+        var conn = await ConnectionRepo.GetConnectionAsync(UserService.UserId!, UserId);
+        conn ??= await ConnectionRepo.GetConnectionAsync(UserId, UserService.UserId!);
+
+        if (conn is not null)
+        {
+            await ConnectionRepo.DeclineFriendRequestAsync(conn.Id!);
+            friendStatus = "none";
+            friendCount--;
+        }
+    }
+
+    private async Task CancelFriendRequest()
+    {
+        var conn = await ConnectionRepo.GetConnectionAsync(UserService.UserId!, UserId);
+        if (conn is not null)
+        {
+            await ConnectionRepo.DeclineFriendRequestAsync(conn.Id!);
+            friendStatus = "none";
+        }
+    }
+
+    private string GetVisibilityClass(string v) => VisibilityHelper.GetVisibilityClass(v);
+
+    private string StripMarkdown(string text) => MarkdownHelper.StripMarkdown(text);
+
+    /// <summary>
+    /// Opens the followers/following/friends overlay dialog.
+    /// Uses InvokeAsync(StateHasChanged) for proper Blazor Server SignalR threading.
+    /// </summary>
+    private async Task OpenList(string type)
+    {
+        listDialogUsers = new();
+
+        if (type == "followers")
+        {
+            listDialogTitle = "Followers";
+            var followers = await ConnectionRepo.GetFollowersAsync(UserId);
+            var ids = followers.Select(c => c.FollowerUserId).ToList();
+            if (ids.Count > 0)
+                listDialogUsers = await ProfileRepo.GetDisplayNamesAsync(ids);
+        }
+        else if (type == "following")
+        {
+            listDialogTitle = "Following";
+            var following = await ConnectionRepo.GetFollowingAsync(UserId);
+            var ids = following.Select(c => c.FollowingUserId).ToList();
+            if (ids.Count > 0)
+                listDialogUsers = await ProfileRepo.GetDisplayNamesAsync(ids);
+        }
+        else if (type == "friends")
+        {
+            listDialogTitle = "Friends";
+            var friends = await ConnectionRepo.GetFriendsAsync(UserId);
+            var ids = friends
+                .Select(c => c.FollowerUserId == UserId ? c.FollowingUserId : c.FollowerUserId)
+                .ToList();
+            if (ids.Count > 0)
+                listDialogUsers = await ProfileRepo.GetDisplayNamesAsync(ids);
+        }
+
+        listDialogOpen = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void CloseList()
+    {
+        listDialogOpen = false;
+    }
+
+    /// <summary>
+    /// Unsubscribe from UserService event to prevent memory leaks.
+    /// </summary>
+    public void Dispose()
+    {
+        _isDisposed = true;
+        UserService.OnSessionReady -= OnSessionReady;
+    }
+
+    private async Task OnTabChanged(int index)
+    {
+        activeTabIndex = index;
+
+        // Lazy-load saved posts only the first time the Saved tab is opened
+        if (index == 1 && IsOwnProfile && !savedPostsLoaded)
+        {
+            var savedIds = await EngageRepo.GetAllSavedPostIdsAsync(UserId);
+            savedPosts = savedIds.Count > 0
+                ? (await BlogRepo.GetByIdsAsync(savedIds)).OrderByDescending(p => p.CreatedAt).ToList()
+                : new List<BlogPost>();
+            savedPostsLoaded = true;
+            StateHasChanged();
+        }
+    }
+}

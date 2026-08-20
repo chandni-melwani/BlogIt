@@ -1,0 +1,115 @@
+@using MudBlazor
+
+<MudDialog Class="custom-logout-dialog">
+    <DialogContent>
+        <div class="logout-dialog-content">
+            <div class="logout-icon-wrapper">
+                <MudIcon Icon="@Icons.Material.Filled.Logout" Class="logout-dialog-icon" />
+            </div>
+            <MudText Class="logout-dialog-title">Log out?</MudText>
+            <MudText Class="logout-dialog-subtitle">
+                Are you sure you want to log out of your account?
+            </MudText>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <div class="logout-dialog-actions">
+            <MudButton Variant="Variant.Outlined" Class="btn-cancel" OnClick="Cancel">
+                Cancel
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Class="btn-logout" OnClick="Confirm">
+                Log out
+            </MudButton>
+        </div>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .custom-logout-dialog {
+        background: var(--color-surface) !important;
+        border: 1px solid var(--color-border) !important;
+        border-radius: 12px !important;
+        padding: 8px !important;
+        max-width: 360px !important;
+        width: 100% !important;
+    }
+
+    .logout-dialog-content {
+        text-align: center;
+        padding: 16px 8px 8px 8px;
+    }
+
+    .logout-icon-wrapper {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--color-error) 12%, transparent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 12px;
+    }
+
+    .logout-dialog-icon {
+        color: var(--color-error) !important;
+        font-size: 24px !important;
+    }
+
+    .logout-dialog-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 600;
+        font-size: 1.3rem;
+        color: var(--color-text-primary);
+        margin-bottom: 6px;
+    }
+
+    .logout-dialog-subtitle {
+        font-size: 0.9rem;
+        color: var(--color-text-secondary);
+        line-height: 1.4;
+    }
+
+    .logout-dialog-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        width: 100%;
+        padding: 8px;
+    }
+
+    .btn-cancel {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-secondary) !important;
+        text-transform: none !important;
+        border-radius: 6px !important;
+        font-weight: 500 !important;
+    }
+
+    .btn-cancel:hover {
+        background: rgba(0, 0, 0, 0.04) !important;
+        color: var(--color-text-primary) !important;
+    }
+
+    .btn-logout {
+        background: var(--color-error) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        box-shadow: none !important;
+    }
+
+    .btn-logout:hover {
+        opacity: 0.9 !important;
+    }
+</style>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Confirm() => MudDialog.Close(DialogResult.Ok(true));
+}

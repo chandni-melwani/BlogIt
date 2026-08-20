@@ -1,0 +1,276 @@
+@using System.Linq
+
+@if (IsOpen)
+{
+    <div class="ai-summary-backdrop" @onclick="Close">
+        <div class="ai-summary-window" @onclick:stopPropagation="true">
+            <div class="ai-summary-titlebar">
+                <span class="ai-summary-titlebar-text">✦ AI SUMMARY</span>
+                <div class="ai-summary-controls">
+                    <button class="ai-summary-btn" @onclick="Close" title="Minimize">−</button>
+                    <button class="ai-summary-btn" @onclick="Close" title="Close">×</button>
+                </div>
+            </div>
+
+            <div class="ai-summary-body">
+                @if (IsLoading)
+                {
+                    <div class="ai-summary-loading">
+                        <span class="ai-summary-spinner">✦</span>
+                        <span>Reading the post and writing a summary…</span>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(SummaryText))
+                {
+                    <p class="ai-summary-text">@ParsedOverview</p>
+
+                    @if (ParsedHighlights.Count > 0)
+                    {
+                        <ul class="ai-summary-highlights">
+                            @foreach (var item in ParsedHighlights)
+                            {
+                                <li>@item</li>
+                            }
+                        </ul>
+                    }
+
+                    @if (GeneratedAt.HasValue)
+                    {
+                        <div class="ai-summary-meta">
+                            Generated @GeneratedAt.Value.ToLocalTime().ToString("dd MMM yyyy, h:mm tt")
+                        </div>
+                    }
+
+                    @if (IsAuthor)
+                    {
+                        <button class="ai-summary-regen-btn" @onclick="Regenerate">
+                            ↻ Regenerate
+                        </button>
+                    }
+                }
+                else
+                {
+                    <p class="ai-summary-text ai-summary-empty">Couldn't generate a summary. Try again.</p>
+                }
+
+                <div class="ai-summary-decor ai-summary-decor-star1">✦</div>
+                <div class="ai-summary-decor ai-summary-decor-star2">✧</div>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .ai-summary-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+
+    .ai-summary-window {
+        position: relative;
+        width: 100%;
+        max-width: 440px;
+        background: var(--ai-summary-bg, var(--color-surface));
+        border: 3px solid var(--ai-summary-border, var(--color-accent));
+        border-radius: 18px;
+        box-shadow: 6px 6px 0 var(--ai-summary-shadow, var(--color-accent));
+        overflow: hidden;
+    }
+
+    .ai-summary-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: var(--ai-summary-titlebar-bg, var(--color-accent));
+        border-bottom: 3px solid var(--ai-summary-border, var(--color-accent));
+    }
+
+    .ai-summary-titlebar-text {
+        font-family: 'Playfair Display', serif;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        font-size: 0.95rem;
+        color: var(--ai-summary-titlebar-text, #FFFFFF);
+    }
+
+    .ai-summary-controls {
+        display: flex;
+        gap: 6px;
+    }
+
+    .ai-summary-btn {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid var(--ai-summary-titlebar-text, #FFFFFF);
+        background: transparent;
+        color: var(--ai-summary-titlebar-text, #FFFFFF);
+        font-size: 0.9rem;
+        line-height: 1;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.1s ease;
+        padding: 0;
+    }
+
+    .ai-summary-btn:hover {
+        transform: scale(1.12);
+    }
+
+    .ai-summary-body {
+        position: relative;
+        padding: 24px 22px 22px;
+    }
+
+    .ai-summary-loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--color-text-secondary);
+        font-size: 0.9rem;
+    }
+
+    .ai-summary-spinner {
+        display: inline-block;
+        animation: ai-summary-spin 1.2s linear infinite;
+        color: var(--ai-summary-border, var(--color-accent));
+        font-size: 1.2rem;
+    }
+
+    @@keyframes ai-summary-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    .ai-summary-text {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+    margin: 0 0 14px;
+}
+
+    .ai-summary-empty {
+        color: var(--color-text-muted);
+        font-style: italic;
+    }
+
+    .ai-summary-meta {
+        font-size: 0.72rem;
+        color: var(--color-text-muted);
+        margin-bottom: 14px;
+    }
+
+    .ai-summary-regen-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 16px;
+        border-radius: 999px;
+        border: 2px solid var(--ai-summary-border, var(--color-accent));
+        background: transparent;
+        color: var(--ai-summary-border, var(--color-accent));
+        font-size: 0.8rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+
+    .ai-summary-regen-btn:hover {
+        background: color-mix(in srgb, var(--ai-summary-border, var(--color-accent)) 12%, transparent);
+    }
+
+    .ai-summary-decor {
+        position: absolute;
+        color: var(--ai-summary-border, var(--color-accent));
+        opacity: 0.45;
+        pointer-events: none;
+        font-size: 1.1rem;
+    }
+
+    .ai-summary-decor-star1 {
+        top: 10px;
+        right: 14px;
+    }
+
+    .ai-summary-decor-star2 {
+        bottom: 10px;
+        right: 26px;
+        font-size: 0.8rem;
+    }
+
+    .ai-summary-highlights {
+    list-style: none;
+    margin: 0 0 14px;
+    padding: 0;
+}
+
+.ai-summary-highlights li {
+    position: relative;
+    padding-left: 20px;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--color-text-primary);
+}
+
+.ai-summary-highlights li::before {
+    content: "✦";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--ai-summary-border, var(--color-accent));
+    font-size: 0.75rem;
+}
+</style>
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public string? SummaryText { get; set; }
+    [Parameter] public DateTime? GeneratedAt { get; set; }
+    [Parameter] public bool IsAuthor { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnRegenerate { get; set; }
+
+
+    private string ParsedOverview
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(SummaryText)) return "";
+            var idx = SummaryText.IndexOf("Highlights:", StringComparison.OrdinalIgnoreCase);
+            return (idx >= 0 ? SummaryText.Substring(0, idx) : SummaryText).Trim();
+        }
+    }
+
+    private List<string> ParsedHighlights
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(SummaryText)) return new();
+            var idx = SummaryText.IndexOf("Highlights:", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return new();
+
+            var rest = SummaryText.Substring(idx + "Highlights:".Length);
+            return rest.Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => l.StartsWith("-"))
+                .Select(l => l.TrimStart('-').Trim())
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+        }
+    }
+
+    private async Task Close() => await OnClose.InvokeAsync();
+    private async Task Regenerate() => await OnRegenerate.InvokeAsync();
+}

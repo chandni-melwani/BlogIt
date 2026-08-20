@@ -1,0 +1,97 @@
+:root {
+    --color-bg: #FFFFFF;
+    --color-surface: #FFFFFF;
+    --color-text-primary: #23281F;
+    --color-text-secondary: #666F5C;
+    --color-text-muted: #8C9180;
+    --color-border: #D8D5C8;
+    --color-accent: #2F4B3C;
+    --color-error: #A9483B;
+    --color-success: #6B8F5A;
+}
+
+html, body {
+    background: var(--color-bg);
+    font-family: 'Inter', 'Helvetica', 'Arial', sans-serif;
+}
+
+html {
+    font-size: 16px;
+}
+
+.mud-main-content {
+    background: var(--color-bg) !important;
+}
+
+.visibility-pill, .visibility-pill-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.visibility-pill {
+    padding: 4px 12px;
+    font-size: 0.78rem;
+}
+
+.visibility-pill-sm {
+    padding: 2px 9px;
+    font-size: 0.68rem;
+}
+
+.visibility-public {
+    background: rgba(107,143,90,0.12);
+    color: var(--color-success) !important;
+}
+
+.visibility-followers {
+    background: rgba(47,75,60,0.10);
+    color: var(--color-accent) !important;
+}
+
+.visibility-private {
+    background: rgba(140,145,128,0.14);
+    color: var(--color-text-muted) !important;
+}
+
+/* Global Spacing Overrides for MudBlazor Components */
+.mud-input-outlined .mud-input-slot {
+    padding: 12px 16px !important;
+}
+
+/* Resting label position (no value / not focused) */
+.mud-input-outlined:not(.mud-shrink) .mud-input-label-outlined {
+    transform: translate(16px, 13px) scale(1) !important;
+}
+
+/* Resting label for inputs with a start adornment (shifts right to clear the icon/text) */
+.mud-input-outlined:not(.mud-shrink) .mud-input-label-outlined.mud-input-label-adornment-start {
+    transform: translate(44px, 13px) scale(1) !important;
+}
+
+/* Shrunk label position (has value or is focused) — class is on the container, not the label */
+.mud-input-outlined.mud-shrink .mud-input-label-outlined {
+    transform: translate(14px, -6px) scale(0.75) !important;
+}
+
+.mud-button {
+    font-weight: 500 !important;
+}
+
+:root.dark-theme {
+    --color-bg: #1B1F17;
+    --color-surface: #242920;
+    --color-text-primary: #E8E6DC;
+    --color-text-secondary: #A9B09B;
+    --color-text-muted: #7C8370;
+    --color-border: #3A4034;
+    --color-accent: #7FA687;
+    --color-error: #D97862;
+    --color-success: #8FBB78;
+}
+
+body, .mud-main-content {
+    transition: background-color 0.2s ease, color 0.2s ease;
+}

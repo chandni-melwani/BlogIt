@@ -1,0 +1,326 @@
+@page "/notifications"
+@implements IDisposable
+@using BlogApp.Models
+@using BlogApp.Services
+@using BlogApp.Data
+@using MudBlazor
+@inject NotificationService NotificationSvc
+@inject ConnectionRepository ConnectionRepo
+@inject UserProfileRepository ProfileRepo
+@inject UserService UserService
+@inject NavigationManager Navigation
+
+<div class="notifications-page">
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-6">
+        <div style="display:flex; align-items:center; justify-content:space-between;" class="mb-4">
+            <MudText Class="page-heading" Style="margin-bottom:0;">Notifications</MudText>
+            @if (notifications.Count > 0)
+            {
+                <MudButton Variant="Variant.Text" Class="mark-read-link" OnClick="MarkAllRead">
+                    Mark all as read
+                </MudButton>
+            }
+        </div>
+
+        @if (isLoading)
+        {
+            <LoadingLogo />
+        }
+        else if (notifications.Count == 0)
+        {
+            <div class="empty-state-box pa-6 text-center">
+                <MudIcon Icon="@Icons.Material.Outlined.NotificationsNone" Class="empty-icon" Style="font-size:3rem;" />
+                <MudText Typo="Typo.body1" Class="empty-subtitle mt-2">
+                    No notifications yet.
+                </MudText>
+            </div>
+        }
+        else
+        {
+            @foreach (var n in notifications)
+            {
+                <div class="@($"notification-row pa-4 mb-2 {(n.IsRead ? "" : "notification-unread")}")">
+
+                    <div style="display:flex; align-items:center; gap:12px;">
+
+                        <MudIcon Icon="@GetIcon(n.Type)"
+                                 Class="@(n.IsRead ? "muted-icon" : "accent-icon")" />
+
+                        <div style="display:flex; flex-direction:column; flex:1;">
+                            <MudLink Href="@GetMessageLink(n)" Class="notification-message-link" Underline="Underline.Hover">
+                                <MudText Typo="Typo.body2">@n.Message</MudText>
+                            </MudLink>
+                            <MudText Typo="Typo.caption" Class="meta-text">
+                                @n.CreatedAt.ToLocalTime().ToString("MMM dd, yyyy · hh:mm tt")
+                            </MudText>
+                        </div>
+
+                        @* Follow Back — shows on the right *@
+                        @if (n.Type == "follow" && !followingBack.GetValueOrDefault(n.FromUserId, false))
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Class="btn-outline-accent"
+                                       Size="Size.Small"
+                                       OnClick="() => FollowBack(n.FromUserId)">
+                                Follow Back
+                            </MudButton>
+                        }
+
+                        @* Accept / Decline — shows on the right *@
+                        @if (n.Type == "friend_request" && pendingRequests.GetValueOrDefault(n.FromUserId) is { } connId)
+                        {
+                            <MudButton Variant="Variant.Filled"
+                                       Class="btn-success-filled"
+                                       Size="Size.Small"
+                                       OnClick="() => AcceptRequest(n.FromUserId, connId)">
+                                Accept
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined"
+                                       Class="btn-outline-error"
+                                       Size="Size.Small"
+                                       OnClick="() => DeclineRequest(n.FromUserId, connId)">
+                                Decline
+                            </MudButton>
+                        }
+
+                        @* Unread dot *@
+                        @if (!n.IsRead)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                     Class="accent-icon"
+                                     Style="font-size:10px;" />
+                        }
+
+                    </div>
+                </div>
+            }
+        }
+    </MudContainer>
+</div>
+
+<style>
+    .notifications-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .page-heading {
+        font-family: 'Playfair Display', serif;
+        font-weight: 500;
+        font-size: 1.6rem;
+        color: var(--color-text-primary);
+        letter-spacing: -0.3px;
+        display: block;
+    }
+
+    .mark-read-link {
+        color: var(--color-accent) !important;
+        text-transform: none !important;
+    }
+
+    .empty-state-box {
+        border: 1px dashed var(--color-border);
+        border-radius: 12px;
+        background: var(--color-surface);
+    }
+
+    .empty-icon {
+        color: var(--color-text-muted) !important;
+    }
+
+    .empty-subtitle {
+        color: var(--color-text-secondary) !important;
+        display: block;
+    }
+
+    .notification-row {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: border-color 0.15s ease;
+    }
+
+        .notification-row:hover {
+            border-color: var(--color-text-muted);
+        }
+
+    .notification-unread {
+        border-left: 4px solid var(--color-accent);
+        background-color: rgba(47, 75, 60, 0.05);
+    }
+
+    .notification-message-link {
+        color: var(--color-text-primary) !important;
+    }
+
+    .meta-text {
+        color: var(--color-text-muted) !important;
+    }
+
+    .muted-icon {
+        color: var(--color-text-muted) !important;
+    }
+
+    .accent-icon {
+        color: var(--color-accent) !important;
+    }
+
+    .btn-outline-accent {
+        border-color: var(--color-accent) !important;
+        color: var(--color-accent) !important;
+        text-transform: none !important;
+    }
+
+    .btn-success-filled {
+        background: var(--color-success) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    .btn-outline-error {
+        border-color: var(--color-error) !important;
+        color: var(--color-error) !important;
+        text-transform: none !important;
+    }
+</style>
+
+@code {
+    private List<Notification> notifications = new();
+    private bool isLoading = true;
+    private Dictionary<string, bool> followingBack = new();
+    private Dictionary<string, string?> pendingRequests = new();
+    private string myUsername = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+
+        if (UserService.IsLoggedIn)
+        {
+            await LoadNotifications();
+        }
+        // Otherwise do nothing — OnSessionReady will fire when MainLayout finishes
+    }
+
+    private async void OnSessionReady()
+    {
+        await InvokeAsync(async () =>
+        {
+            if (UserService.IsLoggedIn)
+            {
+                await LoadNotifications();
+                StateHasChanged();
+            }
+            else
+            {
+                Navigation.NavigateTo("/login");
+            }
+        });
+    }
+
+    private async Task LoadNotifications()
+    {
+        notifications = await NotificationSvc.GetForUserAsync(UserService.UserId!);
+
+        notifications = notifications
+            .GroupBy(n => new { n.Type, n.FromUserId })
+            .Select(g => g.OrderByDescending(n => n.CreatedAt).First())
+            .OrderByDescending(n => n.CreatedAt)
+            .ToList();
+
+        myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+
+        foreach (var n in notifications)
+        {
+            if (n.Type == "follow" && !followingBack.ContainsKey(n.FromUserId))
+            {
+                var alreadyFollowing = await ConnectionRepo.IsFollowingAsync(UserService.UserId!, n.FromUserId);
+                followingBack[n.FromUserId] = alreadyFollowing;
+            }
+            else if (n.Type == "friend_request" && !pendingRequests.ContainsKey(n.FromUserId))
+            {
+                var conn = await ConnectionRepo.GetConnectionAsync(n.FromUserId, UserService.UserId!);
+                if (conn?.Status == "pending")
+                    pendingRequests[n.FromUserId] = conn.Id;
+            }
+        }
+        isLoading = false;
+    }
+
+    private async Task FollowBack(string targetUserId)
+    {
+        await ConnectionRepo.FollowAsync(UserService.UserId!, targetUserId);
+        followingBack[targetUserId] = true;
+
+        await NotificationSvc.SendAsync(
+            toUserId: targetUserId,
+            fromUserId: UserService.UserId!,
+            message: $"{myUsername} followed you back",
+            type: "follow"
+        );
+
+        StateHasChanged();
+    }
+
+    private async Task AcceptRequest(string fromUserId, string connectionId)
+    {
+        await ConnectionRepo.AcceptFriendRequestAsync(connectionId);
+        pendingRequests.Remove(fromUserId);
+
+        await NotificationSvc.SendAsync(
+            toUserId: fromUserId,
+            fromUserId: UserService.UserId!,
+            message: $"{myUsername} accepted your friend request",
+            type: "friend_request"
+        );
+
+        StateHasChanged();
+    }
+
+    private async Task DeclineRequest(string fromUserId, string connectionId)
+    {
+        await ConnectionRepo.DeclineFriendRequestAsync(connectionId);
+        pendingRequests.Remove(fromUserId);
+        StateHasChanged();
+    }
+
+    private async Task MarkAllRead()
+    {
+        await NotificationSvc.MarkAllReadAsync(UserService.UserId!);
+        foreach (var n in notifications)
+            n.IsRead = true;
+    }
+
+    private string GetIcon(string type) => type switch
+    {
+        "follow" => Icons.Material.Filled.PersonAdd,
+        "friend_request" => Icons.Material.Filled.PeopleAlt,
+        "new_post" => Icons.Material.Filled.Article,
+        "like" => Icons.Material.Filled.Favorite,
+        "comment" => Icons.Material.Filled.ChatBubble,
+        _ => Icons.Material.Filled.Notifications
+    };
+
+    // Like/comment notifications route to the post (comments jump straight to the comment section);
+    // everything else (follow, friend_request) routes to the actor's profile, same as before
+    private string GetMessageLink(Notification n) => n.Type switch
+    {
+        "comment" when n.PostId is not null => $"/post/{n.PostId}#comments",
+        "like" when n.PostId is not null => $"/post/{n.PostId}",
+        _ => $"/profile/{n.FromUserId}"
+    };
+
+    public void Dispose()
+    {
+        UserService.OnSessionReady -= OnSessionReady;
+
+        // Fire-and-forget: mark everything read as the user navigates away.
+        // We can't "await" here since Dispose can't be async, but this is fine —
+        // it's a quick database write that doesn't need the user to wait for it.
+        if (UserService.IsLoggedIn)
+        {
+            _ = NotificationSvc.MarkAllReadAsync(UserService.UserId!);
+        }
+    }
+}
