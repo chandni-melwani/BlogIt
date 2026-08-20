@@ -36,3 +36,42 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+/* ── Global Avatar Circle ──────────────────────────────────────────── */
+/*  Used by the shared <AvatarInitial> component.                       */
+.avatar-circle {
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.avatar-circle-sm {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    font-size: 0.85rem;
+}
+
+.avatar-circle-md {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    font-size: 1rem;
+}
+
+.avatar-circle-lg {
+    width: 84px;
+    height: 84px;
+    min-width: 84px;
+    font-size: 2rem;
+}
+
+/* ── Global Visibility Pill ────────────────────────────────────────── */
+.visibility-public    { color: var(--color-success) !important; }
+.visibility-followers { color: var(--color-accent) !important; }
+.visibility-private   { color: var(--color-text-muted) !important; }

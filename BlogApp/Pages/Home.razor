@@ -1,7 +1,820 @@
-﻿@page "/"
+@attribute [StreamRendering(true)]
+@page "/"
+@implements IDisposable
+@using BlogApp.Models
+@using BlogApp.Data
+@using BlogApp.Services
+@using MudBlazor
+@using Microsoft.JSInterop
+@inject BlogRepository BlogRepo
+@inject ConnectionRepository ConnectionRepo
+@inject UserProfileRepository ProfileRepo
+@inject EngagementRepository EngageRepo
+@inject UserService UserService
+@inject NotificationService NotificationSvc
+@inject SearchStateService SearchState
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
 
-<PageTitle>Home</PageTitle>
+<div class="feed-page">
+    <MudContainer MaxWidth="MaxWidth.Large" Class="pt-8 pb-12">
 
-<h1>Hello, world!</h1>
+        @if (isLoading)
+        {
+            <LoadingLogo />
+        }
+        else if (publicPosts.Count == 0 && followerPosts.Count == 0 && privatePosts.Count == 0)
+        {
+            <MudPaper Class="pa-8 text-center empty-state" Elevation="0">
+                <MudIcon Icon="@Icons.Material.Outlined.Article" Size="Size.Large" Class="mb-3 muted-icon" />
+                <MudText Class="empty-title">Nothing to read yet</MudText>
+                <MudText Class="empty-subtitle mt-1">Follow people or write your first post.</MudText>
+                <MudButton Variant="Variant.Filled" Class="write-btn mt-4" Href="/editor">Write a post</MudButton>
+            </MudPaper>
+        }
+        else
+        {
+            @if (UserService.IsLoggedIn && string.IsNullOrEmpty(SearchState.Query))
+            {
+                <div class="section-tabs mb-5">
+                    <button class="@TabClass("Public")" @onclick='() => SetSection("Public")'>Public</button>
+                    <button class="@TabClass("Followers")" @onclick='() => SetSection("Followers")'>Followers</button>
+                    <button class="@TabClass("Private")" @onclick='() => SetSection("Private")'>Private</button>
+                </div>
+            }
 
-Welcome to your new app.
+            @if (isSearching)
+            {
+                <div class="search-loading">Searching…</div>
+            }
+            else if (!string.IsNullOrEmpty(SearchState.Query))
+            {
+                @* Combined Search results view *@
+                @if (searchResults.Count == 0 && userSearchResults.Count == 0)
+                {
+                    <div class="search-empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40">
+                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        <p>No results found for <strong>"@SearchState.Query"</strong>.</p>
+                        <p class="search-empty-hint">Try a different keyword or username.</p>
+                    </div>
+                }
+                else
+                {
+                    <div style="display:flex; flex-direction:column; gap:24px;">
+                        @if (userSearchResults.Count > 0)
+                        {
+                            <div>
+                                <p class="search-results-label mb-3">
+                                    Users (@userSearchResults.Count)
+                                </p>
+                                <div style="display:flex; flex-direction:column; gap:12px;">
+                                    @foreach (var user in userSearchResults)
+                                    {
+                                        <div class="user-search-card">
+                                            <div style="display:flex; align-items:center; gap:12px; flex:1; min-width:0;">
+                                                <AvatarInitial DisplayName="@(string.IsNullOrEmpty(user.Username) ? "User" : user.Username)" Size="md" />
+                                                <div style="min-width:0;">
+                                                    <MudLink Href="@($"/profile/{user.UserId}")" Class="user-search-name" Underline="Underline.Hover">
+                                                        @@@user.Username
+                                                    </MudLink>
+                                                    @if (!string.IsNullOrEmpty(user.Bio))
+                                                    {
+                                                        <p class="user-search-bio">@user.Bio</p>
+                                                    }
+                                                </div>
+                                            </div>
+                                            @if (UserService.IsLoggedIn && user.UserId != UserService.UserId && !followingIds.Contains(user.UserId))
+                                            {
+                                                <button class="follow-pill-btn" @onclick="() => FollowFromFeed(user.UserId)">
+                                                    Follow
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (searchResults.Count > 0)
+                        {
+                            <div>
+                                <p class="search-results-label mb-3">
+                                    Posts (@searchResults.Count)
+                                </p>
+                                <div style="display:flex; flex-direction:column; gap:20px;">
+                                    @foreach (var post in searchResults)
+                                    {
+                                        @RenderPostCard(post)
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                @* Normal feed view *@
+                @if (ActiveList.Count == 0)
+                {
+                    <MudText Class="section-empty">@EmptyText</MudText>
+                }
+                else
+                {
+                    <div style="display:flex; flex-direction:column; gap:20px;">
+                        @foreach (var post in ActiveList)
+                        {
+                            @RenderPostCard(post)
+                        }
+                    </div>
+                }
+            }
+        }
+
+    </MudContainer>
+</div>
+
+@code {
+    // Renders one post card. Called identically regardless of which section is active
+    // so the markup only has to be written once.
+    private RenderFragment RenderPostCard(BlogPost post) => __builder =>
+    {
+        <div class="post-card">
+
+            @* ── Header row ── *@
+            <div class="post-card-header">
+                <AvatarInitial DisplayName="@displayNames.GetValueOrDefault(post.AuthorId, "?")" Size="sm" />
+
+                <div style="min-width:0;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <MudLink Href="@($"/profile/{post.AuthorId}")"
+                                 Class="author-link"
+                                 Underline="Underline.Hover">
+                            @displayNames.GetValueOrDefault(post.AuthorId, post.AuthorId.Substring(0, 8) + "...").TrimStart('@')
+                        </MudLink>
+                        @if (UserService.IsLoggedIn && post.AuthorId != UserService.UserId && !followingIds.Contains(post.AuthorId))
+                        {
+                            <button class="follow-pill-btn" @onclick="() => FollowFromFeed(post.AuthorId)">
+                                Follow
+                            </button>
+                        }
+                    </div>
+                    <span class="meta-text">@post.CreatedAt.ToString("dd MMM yyyy")</span>
+                </div>
+
+                <MudSpacer />
+
+                <span class="@($"visibility-pill-sm {VisibilityHelper.GetVisibilityClass(post.Visibility)}")">@post.Visibility</span>
+
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true"
+                         Class="muted-icon"
+                         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                    <MudMenuItem OnClick="@(() => Navigation.NavigateTo($"/post/{post.Id}"))">Go to post</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => ShareTo(post))">Share</MudMenuItem>
+                    <MudMenuItem OnClick="@(() => CopyLink(post))">Copy link</MudMenuItem>
+                </MudMenu>
+            </div>
+
+            <div class="post-card-body">
+                <div class="post-card-text">
+                    @* Title *@
+                    <div class="post-title">
+                        @post.Title
+                    </div>
+
+                    @* Preview — author subtitle if set, else a smart auto-excerpt *@
+                    <p class="post-preview">
+                        @MarkdownHelper.GetCardPreview(post.Summary, post.Content)
+                    </p>
+
+                    @* Tags *@
+                    @if (post.Tags is { Count: > 0 })
+                    {
+                        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                            @foreach (var tag in post.Tags)
+                            {
+                                <span class="tag-text">#@tag</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(post.ImageUrl))
+                {
+                    <div class="post-card-thumb">
+                        <img src="@post.ImageUrl" alt="@post.Title" />
+                    </div>
+                }
+            </div>
+
+            <div class="action-row">
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <MudIconButton Icon="@(likedPostIds.Contains(post.Id!) ? Icons.Material.Filled.Favorite : Icons.Material.Outlined.FavoriteBorder)"
+                                   Size="Size.Small"
+                                   Class="@(likedPostIds.Contains(post.Id!) ? "liked-icon" : "muted-icon")"
+                                   OnClick="() => ToggleLike(post)" />
+                    <span class="meta-text">@likeCounts.GetValueOrDefault(post.Id!, 0)</span>
+                </div>
+
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <MudIconButton Icon="@Icons.Material.Outlined.ChatBubbleOutline" Size="Size.Small"
+                                   Class="muted-icon"
+                                   OnClick="@(() => Navigation.NavigateTo($"/post/{post.Id}"))" />
+                    <span class="meta-text">@commentCounts.GetValueOrDefault(post.Id!, 0)</span>
+                </div>
+
+                <MudIconButton Icon="@(savedPostIds.Contains(post.Id!) ? Icons.Material.Filled.Bookmark : Icons.Material.Outlined.BookmarkBorder)"
+                               Size="Size.Small"
+                               Class="muted-icon"
+                               OnClick="() => ToggleSave(post)" />
+
+                <MudSpacer />
+
+                <MudLink Href="@($"/post/{post.Id}")"
+                         Class="read-more-link"
+                         Underline="Underline.None">
+                    Read more
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Style="font-size:0.85rem;" />
+                </MudLink>
+            </div>
+
+        </div>
+    };
+}
+
+<style>
+    .feed-page {
+        background: var(--color-bg);
+        min-height: 100vh;
+    }
+
+    .section-tabs {
+        display: flex;
+        gap: 28px;
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    .tab-btn {
+        background: none;
+        border: none;
+        padding: 10px 2px 12px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        transition: color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .tab-btn:hover {
+        color: var(--color-text-primary);
+    }
+
+    .tab-btn.active {
+        color: var(--color-text-primary);
+        border-bottom-color: var(--color-accent);
+    }
+
+    .section-empty {
+        font-size: 0.85rem;
+        color: var(--color-text-muted) !important;
+        padding: 12px 0 8px;
+        display: block;
+    }
+
+    .post-card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        padding: 22px 24px;
+        transition: border-color 0.15s ease;
+    }
+
+        .post-card:hover {
+            border-color: var(--color-text-muted);
+        }
+
+    .post-card-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+    }
+
+    .post-card-body {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 14px;
+    }
+
+    .post-card-text {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    /* ── Aspect-ratio flexible thumbnail (no fill-color band) ── */
+    .post-card-thumb {
+        flex: 0 0 auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        overflow: hidden;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .post-card-thumb img {
+        width: auto;
+        height: auto;
+        max-width: 140px;
+        max-height: 120px;
+        border-radius: 6px;
+        object-fit: contain;
+        display: block;
+    }
+
+    @@media (max-width: 480px) {
+        .post-card-thumb,
+        .post-card-thumb img {
+            max-width: 100px;
+            max-height: 90px;
+        }
+    }
+
+    .author-link {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--color-text-primary) !important;
+        display: block;
+    }
+
+    .meta-text {
+        font-size: 0.72rem;
+        color: var(--color-text-muted);
+    }
+
+    .follow-pill-btn {
+        display: inline-flex;
+        align-items: center;
+        border: none;
+        background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+        color: var(--color-accent);
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 3px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s ease;
+    }
+
+    .follow-pill-btn:hover {
+        background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+    }
+
+    .post-title {
+        font-family: 'Playfair Display', serif;
+        font-weight: 700;
+        font-size: 1.35rem;
+        line-height: 1.3;
+        color: var(--color-text-primary);
+        margin-bottom: 6px;
+    }
+
+    .post-preview {
+        font-size: 0.88rem;
+        line-height: 1.65;
+        color: var(--color-text-secondary);
+        margin: 0 0 4px;
+    }
+
+    .read-more-link {
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: var(--color-accent) !important;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+    }
+
+    .tag-text {
+        font-size: 0.72rem;
+        color: var(--color-accent);
+    }
+
+    .action-row {
+        border-top: 1px solid var(--color-border);
+        padding-top: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+    }
+
+    .muted-icon {
+        color: var(--color-text-muted) !important;
+    }
+
+    .liked-icon {
+        color: var(--color-error) !important;
+    }
+
+    .empty-state {
+        border: 1px dashed var(--color-border) !important;
+        border-radius: 12px !important;
+        background: var(--color-surface) !important;
+    }
+
+    .empty-title {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.1rem;
+        color: var(--color-text-primary) !important;
+    }
+
+    .empty-subtitle {
+        font-size: 0.85rem;
+        color: var(--color-text-secondary) !important;
+    }
+
+    .write-btn {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+        border-radius: 8px !important;
+    }
+
+    /* ── Search UI Styles ── */
+    .search-results-label {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--color-text-secondary);
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+    }
+
+    .user-search-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        padding: 14px 18px;
+        transition: border-color 0.15s ease;
+    }
+
+    .user-search-card:hover {
+        border-color: var(--color-text-muted);
+    }
+
+    .user-search-name {
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--color-text-primary) !important;
+    }
+
+    .user-search-bio {
+        font-size: 0.78rem;
+        color: var(--color-text-secondary);
+        margin: 2px 0 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 320px;
+    }
+
+    .search-loading {
+        font-size: 0.85rem;
+        color: var(--color-text-muted);
+        padding: 12px 0;
+    }
+
+    .search-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 40px 20px;
+        color: var(--color-text-muted);
+        text-align: center;
+    }
+
+    .search-empty-state p {
+        margin: 0;
+        font-size: 0.95rem;
+        color: var(--color-text-secondary);
+    }
+
+    .search-empty-hint {
+        font-size: 0.82rem;
+        color: var(--color-text-muted) !important;
+    }
+</style>
+
+@code {
+    private bool isLoading = true;
+    private string activeSection = "Public";
+
+    private List<BlogPost> publicPosts = new();
+    private List<BlogPost> followerPosts = new();
+    private List<BlogPost> privatePosts = new();
+
+    private Dictionary<string, string> displayNames = new();
+    private HashSet<string> followingIds = new();
+
+    private Dictionary<string, long> likeCounts = new();
+    private Dictionary<string, long> commentCounts = new();
+    private HashSet<string> likedPostIds = new();
+    private HashSet<string> savedPostIds = new();
+
+    // ── Search state ──
+    private bool isSearching = false;
+    private List<BlogPost> searchResults = new();
+    private List<BlogApp.Models.UserProfile> userSearchResults = new();
+
+    private string TabClass(string section) => activeSection == section ? "tab-btn active" : "tab-btn";
+
+    private List<BlogPost> ActiveList => activeSection switch
+    {
+        "Followers" => followerPosts,
+        "Private" => privatePosts,
+        _ => publicPosts
+    };
+
+    private string EmptyText => activeSection switch
+    {
+        "Followers" => "Follow people to see their Followers-only posts here.",
+        "Private" => "Add friends to see their Private posts here.",
+        _ => "No public posts yet."
+    };
+
+    private void SetSection(string section)
+    {
+        activeSection = section;
+        SearchState.Reset();
+    }
+
+    private bool _isDisposed = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        UserService.OnSessionReady += OnSessionReady;
+        SearchState.OnSearchExecuted += PerformSearch;
+        SearchState.OnQueryChanged += OnSearchQueryChanged;
+
+        await LoadFeed();
+    }
+
+    private void OnSearchQueryChanged(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            searchResults = new();
+            userSearchResults = new();
+            isSearching = false;
+        }
+        else
+        {
+            isSearching = true;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async void OnSessionReady()
+    {
+        if (_isDisposed) return;
+
+        await InvokeAsync(async () =>
+        {
+            if (_isDisposed) return;
+            await LoadFeed();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadFeed()
+    {
+        isLoading = true;
+
+        publicPosts = await BlogRepo.GetPublicFeedAsync();
+
+        if (UserService.IsLoggedIn)
+        {
+            var following = await ConnectionRepo.GetFollowingAsync(UserService.UserId!);
+            followingIds = following.Select(c => c.FollowingUserId).ToHashSet();
+
+            var friends = await ConnectionRepo.GetFriendsAsync(UserService.UserId!);
+            var friendIds = friends
+                .Select(c => c.FollowerUserId == UserService.UserId ? c.FollowingUserId : c.FollowerUserId)
+                .ToList();
+
+            followerPosts = await BlogRepo.GetFollowersSectionAsync(UserService.UserId!, followingIds.ToList());
+            privatePosts = await BlogRepo.GetPrivateSectionAsync(UserService.UserId!, friendIds);
+        }
+        else
+        {
+            followerPosts = new();
+            privatePosts = new();
+        }
+
+        var allPosts = publicPosts
+            .Concat(followerPosts)
+            .Concat(privatePosts)
+            .ToList();
+
+        var authorIds = allPosts.Select(p => p.AuthorId).Distinct().ToList();
+        if (authorIds.Count > 0)
+            displayNames = await ProfileRepo.GetDisplayNamesAsync(authorIds);
+
+        var postIds = allPosts.Where(p => p.Id != null).Select(p => p.Id!).Distinct().ToList();
+        if (postIds.Count > 0)
+        {
+            likeCounts = await EngageRepo.GetLikeCountsAsync(postIds);
+            commentCounts = await EngageRepo.GetCommentCountsAsync(postIds);
+
+            if (UserService.IsLoggedIn)
+            {
+                likedPostIds = await EngageRepo.GetLikedPostIdsAsync(UserService.UserId!, postIds);
+                savedPostIds = await EngageRepo.GetSavedPostIdsAsync(UserService.UserId!, postIds);
+            }
+        }
+
+        isLoading = false;
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        UserService.OnSessionReady -= OnSessionReady;
+        SearchState.OnSearchExecuted -= PerformSearch;
+        SearchState.OnQueryChanged -= OnSearchQueryChanged;
+    }
+
+    private string GetVisibilityClass(string v) => VisibilityHelper.GetVisibilityClass(v);
+
+    private async void PerformSearch(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            await InvokeAsync(() =>
+            {
+                searchResults = new();
+                userSearchResults = new();
+                isSearching = false;
+                StateHasChanged();
+            });
+            return;
+        }
+
+        try
+        {
+            List<string> following = followingIds.ToList();
+            List<string> friends   = new();
+
+            if (UserService.IsLoggedIn)
+            {
+                var friendConnections = await ConnectionRepo.GetFriendsAsync(UserService.UserId!);
+                friends = friendConnections
+                    .Select(c => c.FollowerUserId == UserService.UserId ? c.FollowingUserId : c.FollowerUserId)
+                    .ToList();
+            }
+
+            var postResults = await BlogRepo.SearchPostsAsync(
+                query,
+                UserService.IsLoggedIn ? UserService.UserId : null,
+                following,
+                friends);
+
+            var userResults = await ProfileRepo.SearchUsersAsync(query);
+
+            await InvokeAsync(async () =>
+            {
+                searchResults = postResults;
+                userSearchResults = userResults;
+
+                var newAuthorIds = postResults
+                    .Select(p => p.AuthorId)
+                    .Distinct()
+                    .Where(id => !displayNames.ContainsKey(id))
+                    .ToList();
+
+                if (newAuthorIds.Count > 0)
+                {
+                    var extra = await ProfileRepo.GetDisplayNamesAsync(newAuthorIds);
+                    foreach (var (k, v) in extra) displayNames[k] = v;
+                }
+
+                isSearching = false;
+                StateHasChanged();
+            });
+        }
+        catch
+        {
+            await InvokeAsync(() =>
+            {
+                isSearching = false;
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task FollowFromFeed(string authorId)
+    {
+        await ConnectionRepo.FollowAsync(UserService.UserId!, authorId);
+        followingIds.Add(authorId);
+
+        var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+
+        await NotificationSvc.SendAsync(
+            toUserId: authorId,
+            fromUserId: UserService.UserId!,
+            message: $"{myUsername} started following you",
+            type: "follow"
+        );
+
+        StateHasChanged();
+    }
+
+    private async Task ToggleLike(BlogPost post)
+    {
+        if (!UserService.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        var isNowLiked = await EngageRepo.ToggleLikeAsync(post.Id!, UserService.UserId!);
+        var current = likeCounts.GetValueOrDefault(post.Id!, 0);
+
+        if (isNowLiked)
+        {
+            likedPostIds.Add(post.Id!);
+            likeCounts[post.Id!] = current + 1;
+        }
+        else
+        {
+            likedPostIds.Remove(post.Id!);
+            likeCounts[post.Id!] = Math.Max(0, current - 1);
+        }
+
+        if (isNowLiked && post.AuthorId != UserService.UserId)
+        {
+            var myUsername = UserService.Username ?? UserService.UserId!.Substring(0, 8);
+
+            await NotificationSvc.SendAsync(
+                toUserId: post.AuthorId,
+                fromUserId: UserService.UserId!,
+                message: $"@{myUsername} liked your post \"{post.Title}\"",
+                type: "like",
+                postId: post.Id
+            );
+        }
+    }
+
+    private async Task ToggleSave(BlogPost post)
+    {
+        if (!UserService.IsLoggedIn)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        var isNowSaved = await EngageRepo.ToggleSaveAsync(post.Id!, UserService.UserId!);
+        if (isNowSaved)
+            savedPostIds.Add(post.Id!);
+        else
+            savedPostIds.Remove(post.Id!);
+    }
+
+    private async Task CopyLink(BlogPost post)
+    {
+        var url = $"{Navigation.BaseUri}post/{post.Id}";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+        Snackbar.Add("Link copied to clipboard", Severity.Success);
+    }
+
+    private async Task ShareTo(BlogPost post)
+    {
+        var url = $"{Navigation.BaseUri}post/{post.Id}";
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.share", new { title = post.Title, url });
+        }
+        catch
+        {
+            await CopyLink(post);
+        }
+    }
+}

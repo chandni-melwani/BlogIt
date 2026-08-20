@@ -1,54 +1,684 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@implements IDisposable
 @inject UserService UserService
 @inject NavigationManager Navigation
+@inject Supabase.Client SupabaseClient
+@inject NotificationService NotificationSvc
+@inject ISnackbar Snackbar
+@using MudBlazor
 @using BlogApp.Services
+@using BlogApp.Theme
+@inject Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedLocalStorage Storage
+@inject UserProfileRepository ProfileRepo
+@inject SearchStateService SearchState
+@inject IJSRuntime JS
+@inject IDialogService DialogService
 
-<MudThemeProvider />
+
+<MudThemeProvider @bind-IsDarkMode="isDarkMode" Theme="BlogAppTheme.Default" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
 
-<MudLayout>
-    <MudAppBar Elevation="1">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu"
-                       Color="Color.Inherit"
-                       Edge="Edge.Start"
-                       OnClick="ToggleDrawer" />
-        <MudText Typo="Typo.h6">BlogApp</MudText>
+<MudLayout Class="@(UserService.IsLoggedIn ? "has-sidebar" : "")">
+
+    <MudAppBar Elevation="0" Class="app-topbar">
+        @if (UserService.IsLoggedIn)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                           Class="topbar-icon mobile-menu-btn"
+                           Edge="Edge.Start"
+                           OnClick="ToggleDrawer" />
+            <div class="mobile-menu-btn" style="width:1px; height:22px; background:var(--color-border); margin:0 12px;"></div>
+        }
+        <NavLink Href="/" Class="topbar-logo-link" Match="NavLinkMatch.All">
+            <img src="images/blogit-logo.svg" alt="blogIt logo" style="height:30px; width:auto; margin-top:-2px;" />
+            <MudText Class="wordmark">blogIt</MudText>
+        </NavLink>
+        <MudSpacer />
+
+        @if (UserService.IsLoggedIn && _showSearch)
+        {
+            <div class="topbar-search-wrap">
+                <div class="topbar-search">
+                    <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Class="topbar-search-icon" />
+                    <input type="text"
+                           class="topbar-search-input"
+                           placeholder="Search posts or users..."
+                           value="@SearchState.Query"
+                           @oninput="OnSearchInput" />
+                    @if (!string.IsNullOrEmpty(SearchState.Query))
+                    {
+                        <button class="topbar-search-clear" @onclick="ClearSearch">✕</button>
+                    }
+                </div>
+            </div>
+            <MudSpacer />
+        }
+
+        @if (UserService.IsLoggedIn)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Class="topbar-icon"
+                           Href="/editor"
+                           Title="Write a post" />
+
+            @* Bell icon with unread badge *@
+            <MudBadge Content="@unreadCount"
+                      Color="Color.Error"
+                      Overlap="true"
+                      Visible="@(unreadCount > 0)"
+                      Class="mr-2">
+                <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                               Class="topbar-icon"
+                               Href="/notifications" />
+            </MudBadge>
+
+            <MudIconButton Icon="@Icons.Material.Filled.Logout"
+                           Class="topbar-icon"
+                           Title="Logout"
+                           OnClick="Logout" />
+        }
+        else
+        {
+            <MudButton Variant="Variant.Outlined" Class="auth-btn mr-2" Href="/login">
+                Log in
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Class="auth-btn-filled" Href="/signup">
+                Sign up
+            </MudButton>
+        }
     </MudAppBar>
 
-    <MudDrawer @bind-Open="drawerOpen" Variant="DrawerVariant.Responsive">
-        <MudNavMenu>
-            <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">
-                Home
-            </MudNavLink>
-            <MudNavLink Href="/blog" Icon="@Icons.Material.Filled.Article">
-                Blog
-            </MudNavLink>
-        </MudNavMenu>
-    </MudDrawer>
+    @if (UserService.IsLoggedIn)
+    {
+        <MudDrawer @bind-Open="drawerOpen" Variant="DrawerVariant.Responsive" Elevation="0" Width="220px" Class="app-sidebar">
+            <MudNavMenu Class="sidebar-nav">
+                <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">
+                    <span class="nav-label">Home</span>
+                </MudNavLink>
+                <MudNavLink Href="/editor" Icon="@Icons.Material.Filled.Edit">
+                    <span class="nav-label">Write a Post</span>
+                </MudNavLink>
+                <MudNavLink Href="/drafts" Icon="@Icons.Material.Outlined.Drafts">
+                    <span class="nav-label">Drafts</span>
+                </MudNavLink>
+                <MudNavLink Href="/notifications" Icon="@Icons.Material.Filled.Notifications">
+                    <span class="nav-label">Notifications @(unreadCount > 0 ? $"({unreadCount})" : "")</span>
+                </MudNavLink>
+                <MudNavLink Href="@($"/profile/{UserService.UserId}")" Icon="@Icons.Material.Filled.Person">
+                    <span class="nav-label">My Profile</span>
+                </MudNavLink>
+                <div class="mud-nav-link dark-mode-toggle" @onclick="ToggleDarkMode" role="button">
+                    <MudIcon Icon="@(isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" Class="mud-nav-link-icon" />
+                    <span class="nav-label">@(isDarkMode ? "Light Mode" : "Dark Mode")</span>
+                </div>
+                <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">
+                    <span class="nav-label">Settings</span>
+                </MudNavLink>
+            </MudNavMenu>
+        </MudDrawer>
+    }
 
     <MudMainContent>
+        @if (!UserService.IsLoggedIn && IsAuthRoute)
+        {
+            <div class="auth-breadcrumb-bar">
+                <MudLink Href="/" Class="back-to-feed-link">
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" Class="back-icon" />
+                    <span>Back to feed</span>
+                </MudLink>
+            </div>
+        }
         @Body
     </MudMainContent>
 </MudLayout>
 
 @code {
-    private bool drawerOpen = true;
+    private bool drawerOpen = false;
+    private int unreadCount = 0;
+    private bool _notificationsLoaded = false;  // flag to load bell count once UserId is ready
+    private bool _sessionInitialized = false;
+    private bool _showSearch = false;
+    private bool isDarkMode;
 
-    private void ToggleDrawer()
+    private bool IsAuthRoute
     {
-        drawerOpen = !drawerOpen;
+        get
+        {
+            var relativePath = Navigation.ToBaseRelativePath(Navigation.Uri);
+            return relativePath.StartsWith("login") || relativePath.StartsWith("signup");
+        }
+    }
+
+    private void ToggleDrawer() => drawerOpen = !drawerOpen;
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        SearchState.Query = e.Value?.ToString() ?? "";
+    }
+
+    private void ClearSearch()
+    {
+        SearchState.Reset();
     }
 
     protected override void OnInitialized()
     {
-        var currentUrl = Navigation.Uri;
-        if (!UserService.IsLoggedIn &&
-            !currentUrl.Contains("/login") &&
-            !currentUrl.Contains("/signup"))
+        // Listen for page navigation — reset bell when user visits /notifications
+        Navigation.LocationChanged += OnLocationChanged;
+    }
+
+    private string? _previousLocation;
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        var relativePath = Navigation.ToBaseRelativePath(e.Location);
+        var isHome = string.IsNullOrEmpty(relativePath);
+
+        if (_showSearch != isHome)
         {
-            Navigation.NavigateTo("/login");
+            _showSearch = isHome;
+            InvokeAsync(StateHasChanged);
+        }
+
+        // If user navigates away from Home, reset the search state
+        if (!isHome && !string.IsNullOrEmpty(SearchState.Query))
+        {
+            SearchState.Reset();
+        }
+
+        // Badge clears when the user LEAVES the notifications page, not when they arrive —
+        // this way it stays in sync with the "mark read on leave" behavior above.
+        if (_previousLocation is not null &&
+            _previousLocation.Contains("/notifications") &&
+            !e.Location.Contains("/notifications"))
+        {
+            unreadCount = 0;
+            InvokeAsync(StateHasChanged);
+        }
+
+        // Re-check route protection on every in-app navigation (not just first load) —
+        // otherwise a guest clicking into a protected page (e.g. profile) just hangs forever
+        if (_sessionInitialized && !UserService.IsLoggedIn)
+        {
+            var isPublicRoute = relativePath == "" || relativePath.StartsWith("post/");
+
+            if (!isPublicRoute && !e.Location.Contains("/login") && !e.Location.Contains("/signup"))
+            {
+                Navigation.NavigateTo("/login");
+            }
+        }
+
+        _previousLocation = e.Location;
+    }
+
+    private async Task Logout()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, FullWidth = false };
+        var dialog = await DialogService.ShowAsync<BlogApp.Components.Dialogs.ConfirmLogoutDialog>(string.Empty, options);
+        var result = await dialog.Result;
+
+        if (result == null || result.Canceled) return;
+
+        NotificationSvc.OnNotificationSent -= HandleIncomingNotification;
+        try
+        {
+            await SupabaseClient.Auth.SignOut();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Supabase SignOut] {ex.Message}");
+        }
+
+        try
+        {
+            await Storage.DeleteAsync("access_token");
+            await Storage.DeleteAsync("refresh_token");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Storage Clear] {ex.Message}");
+        }
+
+        UserService.UserId = null;
+        UserService.Email = null;
+        UserService.Username = null;
+        UserService.AccessToken = null;
+        UserService.RefreshToken = null;
+        Navigation.NavigateTo("/login");
+    }
+
+    private async Task ToggleDarkMode()
+    {
+        isDarkMode = !isDarkMode;
+        await JS.InvokeVoidAsync("themeInterop.setDarkMode", isDarkMode);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                isDarkMode = await JS.InvokeAsync<bool>("themeInterop.getDarkMode");
+                await JS.InvokeVoidAsync("themeInterop.setDarkMode", isDarkMode);
+                StateHasChanged();
+            }
+            catch { }
+        }
+
+        if (firstRender && !_sessionInitialized)
+        {
+            _sessionInitialized = true;
+
+            try
+            {
+                await SupabaseClient.InitializeAsync();
+            }
+            catch (Exception ex)
+{
+    Console.WriteLine($"[Supabase Init] {ex.Message}");
+}
+
+            var session = SupabaseClient.Auth.CurrentSession;
+
+            if (session?.User != null)
+            {
+                // Session already active (e.g. normal navigation)
+                UserService.UserId = session.User.Id;
+                UserService.Email = session.User.Email;
+                UserService.AccessToken = session.AccessToken;
+                UserService.RefreshToken = session.RefreshToken;
+
+                // Cache display name for notification messages (avoids per-action DB lookups)
+                var profile = await ProfileRepo.GetByUserIdAsync(UserService.UserId!);
+                UserService.Username = profile?.Username ?? UserService.UserId!.Substring(0, 8);
+
+                // Save to local storage for hard refresh recovery
+                await Storage.SetAsync("access_token", session.AccessToken!);
+                await Storage.SetAsync("refresh_token", session.RefreshToken!);
+            }
+            else
+            {
+                // Try to restore from local storage (hard refresh case)
+                try
+                {
+                    var accessResult = await Storage.GetAsync<string>("access_token");
+                    var refreshResult = await Storage.GetAsync<string>("refresh_token");
+
+                    if (accessResult.Success && refreshResult.Success)
+                    {
+                        var restored = await SupabaseClient.Auth.SetSession(
+                            accessResult.Value!,
+                            refreshResult.Value!
+                        );
+
+                        if (restored?.User != null)
+                        {
+                            UserService.UserId = restored.User.Id;
+                            UserService.Email = restored.User.Email;
+                            UserService.AccessToken = restored.AccessToken;
+                            UserService.RefreshToken = restored.RefreshToken;
+
+                            // Cache display name
+                            var restoredProfile = await ProfileRepo.GetByUserIdAsync(UserService.UserId!);
+                            UserService.Username = restoredProfile?.Username ?? UserService.UserId!.Substring(0, 8);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Session restore failed: {ex.Message}");
+                }
+            }
+
+            // Redirect to login if still not authenticated — but allow guests on the home feed
+            var currentUrl = Navigation.Uri;
+            var relativePath = Navigation.ToBaseRelativePath(currentUrl);
+            var isPublicRoute = relativePath == "" || relativePath.StartsWith("post/");
+
+            if (!UserService.IsLoggedIn && !isPublicRoute &&
+                !currentUrl.Contains("/login") &&
+                !currentUrl.Contains("/signup"))
+            {
+                Navigation.NavigateTo("/login");
+                return;
+            }
+
+            // Load notification count
+            if (UserService.IsLoggedIn)
+            {
+                _notificationsLoaded = true;
+                unreadCount = (int)await NotificationSvc.GetUnreadCountAsync(UserService.UserId!);
+                NotificationSvc.OnNotificationSent += HandleIncomingNotification;
+                NotificationSvc.OnAllRead += HandleAllRead;
+
+                SearchState.OnQueryChanged += _ => InvokeAsync(StateHasChanged);
+            }
+
+            // Tell all pages that the session is now available
+            UserService.NotifySessionReady();
+            _showSearch = string.IsNullOrEmpty(relativePath);
+            StateHasChanged();
+        }
+        else if (!_notificationsLoaded && UserService.IsLoggedIn)
+        {
+            _notificationsLoaded = true;
+            unreadCount = (int)await NotificationSvc.GetUnreadCountAsync(UserService.UserId!);
+            NotificationSvc.OnNotificationSent += HandleIncomingNotification;
+            NotificationSvc.OnAllRead += HandleAllRead;  // was missing — fixes bell not resetting
+            
+            SearchState.OnQueryChanged += _ => InvokeAsync(StateHasChanged);
+            _showSearch = string.IsNullOrEmpty(Navigation.ToBaseRelativePath(Navigation.Uri));
+            
+            StateHasChanged();
         }
     }
+
+    // Called instantly when someone sends this user a notification
+    private void HandleIncomingNotification(string toUserId, string message, string type)
+    {
+        if (toUserId != UserService.UserId) return;
+
+        unreadCount++;
+        Snackbar.Add(message, Severity.Info);
+        InvokeAsync(StateHasChanged);  // update UI from background thread
+    }
+
+    private void HandleAllRead(string userId)
+    {
+        if (userId != UserService.UserId) return;
+        unreadCount = 0;
+        InvokeAsync(StateHasChanged);
+    }
+
+    // Always unsubscribe from events when component is removed — prevents memory leaks
+    public void Dispose()
+    {
+        NotificationSvc.OnNotificationSent -= HandleIncomingNotification;
+        NotificationSvc.OnAllRead -= HandleAllRead;
+        Navigation.LocationChanged -= OnLocationChanged;
+        SearchState.OnQueryChanged -= _ => InvokeAsync(StateHasChanged);
+    }
+
 }
+
+<style>
+    .app-topbar {
+        background: var(--color-bg) !important;
+        color: var(--color-text-primary) !important;
+        border-bottom: 1px solid var(--color-border) !important;
+    }
+
+    .topbar-logo-link {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        text-decoration: none !important;
+        cursor: pointer;
+    }
+
+    .wordmark {
+        font-family: 'Playfair Display', serif;
+        font-weight: 600;
+        font-size: 1.5rem;
+        letter-spacing: -0.3px;
+        color: var(--color-text-primary);
+        transition: color 0.15s ease;
+    }
+
+    .topbar-logo-link:hover .wordmark {
+        color: var(--color-accent);
+    }
+
+    /* ── Auth Page Breadcrumb Bar (aligned with topbar logo) ── */
+    .auth-breadcrumb-bar {
+        padding: 20px 24px 8px 24px;
+        display: flex;
+        align-items: center;
+    }
+
+    @@media (max-width: 599.98px) {
+        .auth-breadcrumb-bar {
+            padding-left: 16px;
+            padding-right: 16px;
+        }
+    }
+
+    .back-to-feed-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-text-secondary) !important;
+        font-size: 0.88rem;
+        font-weight: 500;
+        text-decoration: none !important;
+        transition: color 0.15s ease;
+    }
+
+    .back-to-feed-link:hover {
+        color: var(--color-accent) !important;
+    }
+
+    .back-to-feed-link:hover .back-icon {
+        color: var(--color-accent) !important;
+        transform: translateX(-2px);
+    }
+
+    .back-icon {
+        color: var(--color-text-secondary) !important;
+        font-size: 1.1rem !important;
+        transition: color 0.15s ease, transform 0.15s ease;
+    }
+
+    .topbar-icon {
+        color: var(--color-text-secondary) !important;
+    }
+
+    .auth-btn {
+        border-color: var(--color-border) !important;
+        color: var(--color-text-primary) !important;
+        text-transform: none !important;
+    }
+
+    .auth-btn-filled {
+        background: var(--color-accent) !important;
+        color: #FFFFFF !important;
+        text-transform: none !important;
+    }
+
+    /* ── Topbar Search ── */
+    .topbar-search-wrap {
+        position: relative;
+        width: 100%;
+        max-width: 400px;
+        margin: 0 20px;
+    }
+
+    .topbar-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        padding: 6px 12px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+
+    .topbar-search:focus-within {
+        background: var(--color-surface);
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
+    }
+
+    .topbar-search-icon {
+        color: var(--color-text-muted) !important;
+        flex-shrink: 0;
+    }
+
+    .topbar-search-input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        font-size: 0.9rem;
+        color: var(--color-text-primary);
+        outline: none;
+        font-family: inherit;
+        min-width: 0;
+    }
+
+    .topbar-search-input::placeholder {
+        color: var(--color-text-muted);
+    }
+
+    .topbar-search-clear {
+        background: none;
+        border: none;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        font-size: 0.85rem;
+        padding: 2px;
+        line-height: 1;
+        border-radius: 4px;
+        transition: color 0.1s ease;
+        flex-shrink: 0;
+    }
+
+    .topbar-search-clear:hover {
+        color: var(--color-text-primary);
+    }
+
+    /* ── Desktop Instagram-style Collapsible Sidebar (>= 960px) ── */
+    @@media (min-width: 960px) {
+        .mobile-menu-btn {
+            display: none !important;
+        }
+
+        .app-sidebar,
+        .mud-drawer--responsive.mud-drawer--open-docked-left.app-sidebar {
+            width: 72px !important;
+            min-width: 72px !important;
+            max-width: 72px !important;
+            position: fixed !important;
+            top: 56px !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            z-index: 1100 !important;
+            overflow: hidden !important;
+            transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease !important;
+            background: var(--color-bg) !important;
+            border-right: 1px solid var(--color-border) !important;
+        }
+
+        .app-sidebar:hover {
+            width: 220px !important;
+            min-width: 220px !important;
+            max-width: 220px !important;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12) !important;
+        }
+
+        .has-sidebar .mud-main-content {
+            padding-left: 72px !important;
+            margin-left: 0 !important;
+            transition: padding-left 0.25s ease !important;
+        }
+
+        .sidebar-nav {
+            padding: 16px 8px !important;
+        }
+
+        .sidebar-nav .mud-nav-link {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            border-radius: 8px !important;
+            margin-bottom: 6px !important;
+            padding: 12px 14px !important;
+            color: var(--color-text-secondary) !important;
+            font-size: 0.9rem !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            transition: background-color 0.15s ease, color 0.15s ease !important;
+        }
+
+        .sidebar-nav .mud-nav-link .mud-nav-link-icon {
+            margin-right: 0 !important;
+            flex-shrink: 0 !important;
+            font-size: 22px !important;
+        }
+
+        .sidebar-nav .nav-label {
+            opacity: 0;
+            visibility: hidden;
+            width: 0;
+            margin-left: 0;
+            white-space: nowrap;
+            transition: opacity 0.2s ease, margin-left 0.2s ease, visibility 0.2s ease;
+        }
+
+        .app-sidebar:hover .sidebar-nav .nav-label {
+            opacity: 1;
+            visibility: visible;
+            width: auto;
+            margin-left: 14px;
+        }
+
+        .sidebar-nav .mud-nav-link:hover {
+            background-color: rgba(47, 75, 60, 0.06) !important;
+            color: var(--color-text-primary) !important;
+        }
+
+        .dark-mode-toggle {
+            cursor: pointer !important;
+        }
+
+        .sidebar-nav .mud-nav-link[aria-current="page"],
+        .sidebar-nav .mud-nav-link.active {
+            background-color: rgba(47, 75, 60, 0.1) !important;
+            border-left: 3px solid var(--color-accent) !important;
+            color: var(--color-accent) !important;
+            font-weight: 600 !important;
+        }
+
+        .sidebar-nav .mud-nav-link[aria-current="page"] .mud-icon-root,
+        .sidebar-nav .mud-nav-link.active .mud-icon-root {
+            color: var(--color-accent) !important;
+        }
+    }
+
+    @@media (max-width: 959.98px) {
+        .app-sidebar {
+            background: var(--color-bg) !important;
+            border-right: 1px solid var(--color-border) !important;
+        }
+
+        .sidebar-nav {
+            padding: 24px 20px !important;
+        }
+
+        .sidebar-nav .mud-nav-link {
+            display: flex !important;
+            align-items: center !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            padding: 10px 12px !important;
+            color: var(--color-text-secondary) !important;
+            font-size: 0.9rem;
+            line-height: 1.2;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .sidebar-nav .mud-nav-link .mud-nav-link-icon {
+            margin-right: 12px !important;
+        }
+
+        .sidebar-nav .nav-label {
+            opacity: 1;
+            visibility: visible;
+            width: auto;
+            margin-left: 0;
+        }
+    }
+</style>
